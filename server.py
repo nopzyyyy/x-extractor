@@ -14,7 +14,6 @@ app = Flask(__name__)
 DEFAULT_AUTH_TOKEN = "2f35b33c411690dae748d149822b216bfe58bafd"
 AUTH_TOKEN = os.environ.get("X_AUTH_TOKEN", DEFAULT_AUTH_TOKEN)
 
-# Month map for parsing "Joined [Month] [Year]"
 MONTH_MAP = {
     "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
     "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12
@@ -49,25 +48,19 @@ def extract_root_domain(url):
     if not url:
         return ""
     try:
-        # Pre-clean
         clean_url = url.strip().rstrip(".,;:!?)'\"")
         p = urlparse(clean_url)
         netloc = p.netloc.lower()
         if not netloc:
-            # Maybe schema is missing
-            if clean_url.startswith("http://") or clean_url.startswith("https://"):
-                pass
-            else:
+            if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
                 p = urlparse("https://" + clean_url)
                 netloc = p.netloc.lower()
-                
+
         if not netloc:
             return ""
 
-        # Remove port
         netloc = netloc.split(":")[0]
 
-        # Strip www prefix
         if netloc.startswith("www."):
             netloc = netloc[4:]
 
@@ -80,10 +73,8 @@ def extract_root_domain(url):
         if netloc in internal_domains or netloc.endswith(".twitter.com") or netloc.endswith(".x.com") or netloc.endswith(".twimg.com"):
             return ""
 
-        # Validate domain format (has at least one dot and valid tld)
         parts = netloc.split(".")
         if len(parts) >= 2 and len(parts[-1]) >= 2:
-            # Handle common multi-part ccTLDs like .co.uk, .com.br, etc.
             two_part_tlds = {"co.uk", "org.uk", "gov.uk", "com.br", "co.jp", "com.au", "net.au"}
             last_two = ".".join(parts[-2:])
             if last_two in two_part_tlds and len(parts) >= 3:
@@ -154,23 +145,29 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
 
         # Step 1: Discover Account Creation Era
         profile_url = f"https://x.com/{handle}"
-        joined_year = 2006
+        joined_year = None
         joined_month = 1
 
         try:
             await page.goto(profile_url, wait_until="domcontentloaded", timeout=25000)
-            await page.wait_for_selector('[data-testid="primaryColumn"]', timeout=10000)
-            
+            try:
+                await page.wait_for_selector('[data-testid="UserProfileHeader_Items"]', timeout=8000)
+            except Exception:
+                pass
+            await asyncio.sleep(1.8)
+
             profile_data = await page.evaluate('''() => {
                 const nameEl = document.querySelector('[data-testid="UserName"]');
                 const headerItems = document.querySelector('[data-testid="UserProfileHeader_Items"]');
                 const avatarEl = document.querySelector('img[src*="profile_images"]');
                 const bioEl = document.querySelector('[data-testid="UserDescription"]');
+                const bodyText = document.body ? document.body.innerText : '';
                 return {
                     name: nameEl ? nameEl.innerText.split('\\n')[0] : '',
                     headerText: headerItems ? headerItems.innerText : '',
                     avatar: avatarEl ? avatarEl.getAttribute('src') : '',
-                    bio: bioEl ? bioEl.innerText : ''
+                    bio: bioEl ? bioEl.innerText : '',
+                    bodyText: bodyText
                 };
             }''')
 
@@ -178,43 +175,51 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
             result["profile"]["avatar"] = profile_data.get("avatar") or ""
             result["profile"]["bio"] = profile_data.get("bio") or ""
 
-            header_text = profile_data.get("headerText", "")
-            match = re.search(r"Joined\s+([A-Za-z]+)\s+(\d{4})", header_text, re.IGNORECASE)
+            combined_text = (profile_data.get("headerText") or "") + "\n" + (profile_data.get("bodyText") or "")
+            match = re.search(r"Joined\s+([A-Za-z]+)\s+(\d{4})", combined_text, re.IGNORECASE)
             if match:
                 m_name = match.group(1).lower()
                 joined_year = int(match.group(2))
                 joined_month = MONTH_MAP.get(m_name, 1)
                 result["joined"] = f"{match.group(1).capitalize()} {joined_year}"
             else:
-                result["joined"] = "Founding Era"
+                result["joined"] = "Early Era"
         except Exception as e:
             print(f"[Warning] Profile header load error: {e}")
-            result["joined"] = "Founding Era"
+            result["joined"] = "Early Era"
 
         # Determine target search date range
         if cutoff_override:
             cutoff_date = cutoff_override
-        else:
-            # Span 1 to 2 years after joined date to capture the complete beginning era
+            search_query = f"(from:{handle}) until:{cutoff_date}"
+        elif joined_year:
             current_year = datetime.now().year
-            if joined_year >= current_year:
-                cutoff_date = f"{current_year}-12-31"
-            else:
-                cutoff_year = min(joined_year + 1, current_year)
-                cutoff_date = f"{cutoff_year}-12-31"
+            cutoff_year = min(joined_year + 1, current_year)
+            cutoff_date = f"{cutoff_year}-12-31"
+            search_query = f"(from:{handle}) until:{cutoff_date}"
+        else:
+            cutoff_date = "Beginning/Live"
+            search_query = f"(from:{handle})"
 
         result["cutoff_date"] = cutoff_date
 
         # Step 2: Target Search Query from Beginning
-        search_query = f"(from:{handle}) until:{cutoff_date}"
         search_url = f"https://x.com/search?q={search_query}&src=typed_query&f=live"
         print(f"[Scraper] Navigating to: {search_url}")
 
         await page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
         try:
-            await page.wait_for_selector('article', timeout=12000)
+            await page.wait_for_selector('article', timeout=8000)
         except Exception:
-            print("[Warning] No immediate articles found in search cutoff, will attempt scroll.")
+            # Fallback: If no articles found with date range, try query without until
+            if joined_year:
+                print(f"[Fallback] Trying general from:{handle} query")
+                search_url = f"https://x.com/search?q=(from:{handle})&src=typed_query&f=live"
+                await page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
+                try:
+                    await page.wait_for_selector('article', timeout=8000)
+                except Exception:
+                    pass
 
         seen_status_urls = set()
         posts_list = []
@@ -227,7 +232,7 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
                     const textEl = a.querySelector('[data-testid="tweetText"]');
                     const timeEl = a.querySelector('time');
                     const statusLink = a.querySelector('a[href*="/status/"]');
-                    
+
                     const links = [];
                     if (textEl) {
                         textEl.querySelectorAll('a').forEach(l => {
@@ -237,7 +242,7 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
                             if (href) links.push({ href, text, title });
                         });
                     }
-                    
+
                     return {
                         text: textEl ? textEl.innerText : '',
                         time: timeEl ? timeEl.getAttribute('datetime') : '',
@@ -257,15 +262,12 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
                 text = item.get("text", "")
                 raw_time = item.get("time", "")
 
-                # Collect outbound links
                 dom_links = [l["href"] for l in item.get("links", []) if l.get("href")]
-                # Also inspect visible text or title if t.co was shortened
                 dom_titles = [l["title"] for l in item.get("links", []) if l.get("title") and ("http://" in l.get("title") or "https://" in l.get("title"))]
                 text_urls = re.findall(r"https?://[^\s]+", text)
 
                 all_candidate_urls = list(set(dom_links + dom_titles + text_urls))
 
-                # Extract and aggregate unique domains for this post
                 tweet_domains = set()
                 tweet_clean_urls = []
 
@@ -285,7 +287,6 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
                     "domains": sorted(list(tweet_domains))
                 })
 
-            # Scroll down for additional posts
             await page.evaluate("window.scrollBy(0, 1800)")
             await asyncio.sleep(1.5)
 
@@ -294,7 +295,6 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
         # Sort posts strictly oldest first (Beginning -> Newer)
         posts_list.sort(key=lambda x: x["created_at"])
 
-        # Format domain summary
         domain_summary = []
         for dom, count in sorted(domain_counts.items(), key=lambda x: x[1], reverse=True):
             domain_summary.append({
