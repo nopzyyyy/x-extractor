@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>X Extractor — Beginning Posts & Domain Intelligence Dashboard</title>
+  <title>X Extractor â€” Beginning Posts & Domain Intelligence Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -136,7 +136,7 @@
           <div class="min-w-0">
             <h3 id="profileName" class="text-sm font-bold truncate text-[#F7F9F9]">User</h3>
             <p id="profileHandle" class="text-xs text-[#71767B] truncate">@user</p>
-            <p id="profileJoined" class="text-[11px] text-[#1D9BF0] mt-0.5 font-medium">Joined: —</p>
+            <p id="profileJoined" class="text-[11px] text-[#1D9BF0] mt-0.5 font-medium">Joined: â€”</p>
           </div>
         </div>
 
@@ -157,7 +157,7 @@
         <!-- Earliest Date -->
         <div class="p-4 rounded-xl bg-[#16181C] border border-[#2F3336]">
           <span class="text-xs text-[#71767B] block">Earliest Post</span>
-          <span id="kpiEarliest" class="text-sm font-bold text-[#F7F9F9] mt-1.5 block truncate">—</span>
+          <span id="kpiEarliest" class="text-sm font-bold text-[#F7F9F9] mt-1.5 block truncate">â€”</span>
           <span class="text-[11px] text-[#71767B]">Chronological origin</span>
         </div>
       </div>
@@ -293,7 +293,7 @@
       document.getElementById('kpiPosts').innerText = data.total_posts;
       document.getElementById('kpiDomains').innerText = data.unique_domains_count;
       
-      const earliest = data.posts.length > 0 ? formatDate(data.posts[0].created_at) : '—';
+      const earliest = data.posts.length > 0 ? formatDate(data.posts[0].created_at) : 'â€”';
       document.getElementById('kpiEarliest').innerText = earliest;
 
       // Render domains
@@ -412,7 +412,7 @@
             <div class="flex items-center gap-2">
               <span class="font-bold text-sm text-[#F7F9F9]">${globalData.profile.name || globalData.handle}</span>
               <span class="text-xs text-[#71767B]">@${globalData.handle}</span>
-              <span class="text-xs text-[#71767B]">·</span>
+              <span class="text-xs text-[#71767B]">Â·</span>
               <span class="text-xs text-[#71767B]">${formatDate(p.created_at)}</span>
             </div>
             ${p.post_url ? `
@@ -438,7 +438,7 @@
     }
 
     function formatDate(isoStr) {
-      if (!isoStr) return '—';
+      if (!isoStr) return 'â€”';
       try {
         const d = new Date(isoStr);
         return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
