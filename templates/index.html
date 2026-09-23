@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>X Extractor — Beginning Posts & Domain Intelligence Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: '#1D9BF0',
+            darkBg: '#000000',
+            darkCard: '#16181C',
+            darkBorder: '#2F3336',
+            lightBg: '#F9FAFB',
+            lightCard: '#FFFFFF',
+            lightBorder: '#E5E7EB',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * {
+      box-shadow: none !important;
+      text-shadow: none !important;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #71767B;
+      border-radius: 2px;
+    }
+  </style>
+</head>
+<body class="bg-black text-[#F7F9F9] min-h-screen selection:bg-[#1D9BF0]/30 transition-colors">
+  
+  <!-- Main Container -->
+  <div class="max-w-4xl mx-auto px-4 py-8">
+    
+    <!-- Top Header -->
+    <header class="flex items-center justify-between pb-6 border-b border-[#2F3336]">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-full bg-[#16181C] border border-[#2F3336] flex items-center justify-center font-bold text-lg text-[#1D9BF0]">
+          ??
+        </div>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-[#F7F9F9] flex items-center gap-2">
+            X Extractor <span class="text-xs px-2 py-0.5 rounded-full bg-[#1D9BF0]/15 text-[#1D9BF0] font-medium border border-[#1D9BF0]/30">Dashboard</span>
+          </h1>
+          <p class="text-xs text-[#71767B]">
+            Scrapes posts from the beginning & extracts every unique outbound domain
+          </p>
+        </div>
+      </div>
+      
+      <!-- Right Controls -->
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-[#71767B] hidden sm:inline-block">Auth: Permanent Active</span>
+        <div class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" title="X Auth Token Connected"></div>
+      </div>
+    </header>
+
+    <!-- Search Deck -->
+    <section class="mt-6 p-5 rounded-xl bg-[#16181C] border border-[#2F3336]">
+      <form id="scrapeForm" onsubmit="handleScrape(event)" class="space-y-4">
+        <div class="flex flex-col sm:flex-row gap-3">
+          <div class="relative flex-1">
+            <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#71767B] font-medium text-sm">@</span>
+            <input 
+              type="text" 
+              id="handleInput"
+              placeholder="Enter X handle (e.g. cristiano, jack, elonmusk)"
+              value="jack"
+              required
+              class="w-full pl-8 pr-4 py-3 text-sm bg-[#000000] border border-[#2F3336] rounded-lg text-[#F7F9F9] focus:outline-none focus:border-[#1D9BF0] placeholder:text-[#71767B] transition-colors"
+            />
+          </div>
+          
+          <button 
+            type="submit" 
+            id="scrapeBtn"
+            class="px-6 py-3 bg-[#1D9BF0] hover:bg-[#1A8CD8] active:opacity-90 text-white text-sm font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
+          >
+            <span id="btnSpinner" class="hidden animate-spin">?</span>
+            <span id="btnText">? Scrape From Beginning</span>
+          </button>
+        </div>
+
+        <!-- Quick Suggestions & Options -->
+        <div class="flex items-center justify-between flex-wrap gap-2 pt-1 text-xs text-[#71767B]">
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <span>Quick Presets:</span>
+            <button type="button" onclick="setHandle('jack')" class="px-2.5 py-1 rounded-md bg-[#000000] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors">@jack (2006)</button>
+            <button type="button" onclick="setHandle('cristiano')" class="px-2.5 py-1 rounded-md bg-[#000000] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors">@cristiano (2010)</button>
+            <button type="button" onclick="setHandle('elonmusk')" class="px-2.5 py-1 rounded-md bg-[#000000] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors">@elonmusk</button>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <label for="scrollCount" class="text-xs text-[#71767B]">Scroll depth:</label>
+            <select id="scrollCount" class="bg-[#000000] border border-[#2F3336] rounded px-2 py-1 text-xs text-[#E7E9EA] focus:outline-none focus:border-[#1D9BF0]">
+              <option value="2">2 scrolls (~15-30 posts)</option>
+              <option value="4" selected>4 scrolls (~30-60 posts)</option>
+              <option value="8">8 scrolls (~60-120 posts)</option>
+              <option value="15">15 scrolls (~150+ posts)</option>
+            </select>
+          </div>
+        </div>
+      </form>
+
+      <!-- Status Indicator -->
+      <div id="statusBox" class="hidden mt-4 pt-4 border-t border-[#2F3336]/60">
+        <div class="flex items-center gap-2.5 text-xs text-[#1D9BF0]">
+          <div class="w-2 h-2 rounded-full bg-[#1D9BF0] animate-ping"></div>
+          <span id="statusMessage" class="font-medium">Initializing automated Chromium browser...</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Results Section (Hidden until scraped) -->
+    <div id="resultsSection" class="hidden mt-8 space-y-6">
+      
+      <!-- Profile & KPI Cards -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <!-- Profile Info -->
+        <div class="col-span-2 sm:col-span-1 p-4 rounded-xl bg-[#16181C] border border-[#2F3336] flex items-center gap-3">
+          <img id="profileAvatar" src="" alt="Avatar" class="w-12 h-12 rounded-full border border-[#2F3336] bg-[#000000] object-cover" />
+          <div class="min-w-0">
+            <h3 id="profileName" class="text-sm font-bold truncate text-[#F7F9F9]">User</h3>
+            <p id="profileHandle" class="text-xs text-[#71767B] truncate">@user</p>
+            <p id="profileJoined" class="text-[11px] text-[#1D9BF0] mt-0.5 font-medium">Joined: —</p>
+          </div>
+        </div>
+
+        <!-- Total Posts -->
+        <div class="p-4 rounded-xl bg-[#16181C] border border-[#2F3336]">
+          <span class="text-xs text-[#71767B] block">Total Posts</span>
+          <span id="kpiPosts" class="text-xl font-bold text-[#F7F9F9] mt-1 block">0</span>
+          <span class="text-[11px] text-emerald-400 font-medium">Scraped from start</span>
+        </div>
+
+        <!-- Unique Domains -->
+        <div class="p-4 rounded-xl bg-[#16181C] border border-[#2F3336]">
+          <span class="text-xs text-[#71767B] block">Unique Domains</span>
+          <span id="kpiDomains" class="text-xl font-bold text-[#1D9BF0] mt-1 block">0</span>
+          <span class="text-[11px] text-[#71767B]">Filtered root domains</span>
+        </div>
+
+        <!-- Earliest Date -->
+        <div class="p-4 rounded-xl bg-[#16181C] border border-[#2F3336]">
+          <span class="text-xs text-[#71767B] block">Earliest Post</span>
+          <span id="kpiEarliest" class="text-sm font-bold text-[#F7F9F9] mt-1.5 block truncate">—</span>
+          <span class="text-[11px] text-[#71767B]">Chronological origin</span>
+        </div>
+      </div>
+
+      <!-- Domain Intelligence Bar -->
+      <section class="p-5 rounded-xl bg-[#16181C] border border-[#2F3336]">
+        <div class="flex items-center justify-between pb-3 mb-3 border-b border-[#2F3336]">
+          <div class="flex items-center gap-2">
+            <h2 class="text-sm font-bold text-[#F7F9F9]">Extracted Outbound Domains</h2>
+            <span id="domainCountBadge" class="text-xs px-2 py-0.5 rounded-full bg-[#2F3336] text-[#E7E9EA]">0</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="clearDomainFilter()" id="clearFilterBtn" class="hidden text-xs text-[#1D9BF0] hover:underline">Clear Filter</button>
+            <button onclick="exportDomainsTxt()" class="text-xs px-2.5 py-1 rounded bg-[#000000] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors">Export Domains (TXT)</button>
+          </div>
+        </div>
+
+        <!-- Domain Tag Chips -->
+        <div id="domainChipsContainer" class="flex flex-wrap gap-2">
+          <!-- Dynamically populated -->
+        </div>
+      </section>
+
+      <!-- Posts Feed Header -->
+      <div class="flex items-center justify-between gap-3 flex-wrap pt-2">
+        <div class="flex items-center gap-2">
+          <h2 class="text-base font-bold text-[#F7F9F9]">Chronological Posts Feed</h2>
+          <span id="filteredPostsCount" class="text-xs text-[#71767B]">(Showing all posts)</span>
+        </div>
+
+        <!-- Controls: Text search & Order toggle & Exports -->
+        <div class="flex items-center gap-2 flex-wrap">
+          <input 
+            type="text" 
+            id="feedFilterInput" 
+            oninput="applyFilters()" 
+            placeholder="Search within posts..." 
+            class="px-3 py-1.5 text-xs bg-[#16181C] border border-[#2F3336] rounded-lg text-[#F7F9F9] placeholder:text-[#71767B] focus:outline-none focus:border-[#1D9BF0] transition-colors w-48"
+          />
+          <button 
+            onclick="toggleSortOrder()" 
+            id="sortToggleBtn"
+            class="px-3 py-1.5 text-xs rounded-lg bg-[#16181C] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors flex items-center gap-1.5"
+          >
+            <span>?? Oldest First (Beginning)</span>
+          </button>
+          <button 
+            onclick="exportCsv()" 
+            class="px-3 py-1.5 text-xs rounded-lg bg-[#16181C] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors"
+          >
+            Export CSV
+          </button>
+        </div>
+      </div>
+
+      <!-- Posts List -->
+      <div id="postsFeedContainer" class="space-y-3">
+        <!-- Dynamically populated cards -->
+      </div>
+
+    </div>
+
+    <!-- Empty / Initial State Placeholder -->
+    <div id="emptyPlaceholder" class="mt-16 text-center py-16 border border-dashed border-[#2F3336] rounded-xl bg-[#16181C]/40">
+      <div class="w-12 h-12 rounded-full bg-[#16181C] border border-[#2F3336] flex items-center justify-center mx-auto text-[#71767B] mb-3 text-lg">
+        ??
+      </div>
+      <h3 class="text-sm font-semibold text-[#F7F9F9] mb-1">Ready to Scrape Account</h3>
+      <p class="text-xs text-[#71767B] max-w-sm mx-auto">
+        Enter any X handle above. The automated engine navigates to the account's founding era, extracts posts from the very beginning, and filters out all outbound root domains.
+      </p>
+    </div>
+
+  </div>
+
+  <script>
+    let globalData = null;
+    let selectedDomainFilter = null;
+    let sortAscending = true; // Oldest first by default (from beginning)
+
+    function setHandle(h) {
+      document.getElementById('handleInput').value = h;
+    }
+
+    async function handleScrape(e) {
+      e.preventDefault();
+      const handle = document.getElementById('handleInput').value.trim();
+      const scrolls = parseInt(document.getElementById('scrollCount').value);
+      if (!handle) return;
+
+      // UI Loading state
+      document.getElementById('scrapeBtn').disabled = true;
+      document.getElementById('btnSpinner').classList.remove('hidden');
+      document.getElementById('btnText').innerText = "Scraping...";
+      document.getElementById('statusBox').classList.remove('hidden');
+      document.getElementById('statusMessage').innerText = `Connecting to X with permanent auth... Inspecting @${handle}'s profile`;
+
+      try {
+        const res = await fetch('/api/scrape', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ handle, scrolls })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to scrape profile");
+        }
+
+        globalData = data;
+        renderDashboard(data);
+      } catch (err) {
+        alert("Scraping error: " + err.message);
+      } finally {
+        document.getElementById('scrapeBtn').disabled = false;
+        document.getElementById('btnSpinner').classList.add('hidden');
+        document.getElementById('btnText').innerText = "? Scrape From Beginning";
+        document.getElementById('statusBox').classList.add('hidden');
+      }
+    }
+
+    function renderDashboard(data) {
+      document.getElementById('emptyPlaceholder').classList.add('hidden');
+      document.getElementById('resultsSection').classList.remove('hidden');
+
+      // Profile details
+      document.getElementById('profileAvatar').src = data.profile.avatar || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png';
+      document.getElementById('profileName').innerText = data.profile.name || data.handle;
+      document.getElementById('profileHandle').innerText = '@' + data.handle;
+      document.getElementById('profileJoined').innerText = `Joined: ${data.joined || 'Early Era'}`;
+
+      // KPIs
+      document.getElementById('kpiPosts').innerText = data.total_posts;
+      document.getElementById('kpiDomains').innerText = data.unique_domains_count;
+      
+      const earliest = data.posts.length > 0 ? formatDate(data.posts[0].created_at) : '—';
+      document.getElementById('kpiEarliest').innerText = earliest;
+
+      // Render domains
+      renderDomains(data.domains);
+
+      // Render feed
+      applyFilters();
+    }
+
+    function renderDomains(domains) {
+      const container = document.getElementById('domainChipsContainer');
+      document.getElementById('domainCountBadge').innerText = domains.length;
+      container.innerHTML = '';
+
+      if (domains.length === 0) {
+        container.innerHTML = '<span class="text-xs text-[#71767B]">No external domains detected in these posts.</span>';
+        return;
+      }
+
+      domains.forEach(d => {
+        const isSelected = selectedDomainFilter === d.domain;
+        const chip = document.createElement('div');
+        chip.className = `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-colors cursor-pointer ${
+          isSelected 
+            ? 'bg-[#1D9BF0] text-white border-[#1D9BF0]' 
+            : 'bg-[#000000] text-[#E7E9EA] border-[#2F3336] hover:border-[#1D9BF0]'
+        }`;
+        
+        chip.innerHTML = `
+          <span onclick="filterByDomain('${d.domain}')" class="font-medium">${d.domain}</span>
+          <span class="px-1.5 py-0.2 rounded-full ${isSelected ? 'bg-white/20 text-white' : 'bg-[#2F3336] text-[#71767B]'} text-[10px] font-bold">${d.count}</span>
+          <a href="${d.namecheap_url}" target="_blank" rel="noopener noreferrer" title="Check Registrar Availability on Namecheap" class="text-[#71767B] hover:text-white ml-1">?</a>
+        `;
+        container.appendChild(chip);
+      });
+    }
+
+    function filterByDomain(domain) {
+      if (selectedDomainFilter === domain) {
+        selectedDomainFilter = null;
+        document.getElementById('clearFilterBtn').classList.add('hidden');
+      } else {
+        selectedDomainFilter = domain;
+        document.getElementById('clearFilterBtn').classList.remove('hidden');
+      }
+      renderDomains(globalData.domains);
+      applyFilters();
+    }
+
+    function clearDomainFilter() {
+      selectedDomainFilter = null;
+      document.getElementById('clearFilterBtn').classList.add('hidden');
+      renderDomains(globalData.domains);
+      applyFilters();
+    }
+
+    function toggleSortOrder() {
+      sortAscending = !sortAscending;
+      const btn = document.getElementById('sortToggleBtn');
+      btn.innerHTML = sortAscending 
+        ? '<span>?? Oldest First (Beginning)</span>' 
+        : '<span>?? Newest First</span>';
+      applyFilters();
+    }
+
+    function applyFilters() {
+      if (!globalData || !globalData.posts) return;
+      const searchTerm = document.getElementById('feedFilterInput').value.toLowerCase();
+      
+      let filtered = globalData.posts.filter(p => {
+        const matchesSearch = !searchTerm || p.text.toLowerCase().includes(searchTerm) || p.domains.some(d => d.toLowerCase().includes(searchTerm));
+        const matchesDomain = !selectedDomainFilter || p.domains.includes(selectedDomainFilter);
+        return matchesSearch && matchesDomain;
+      });
+
+      // Sort
+      filtered.sort((a, b) => {
+        const dateA = new Date(a.created_at).getTime();
+        const dateB = new Date(b.created_at).getTime();
+        return sortAscending ? dateA - dateB : dateB - dateA;
+      });
+
+      document.getElementById('filteredPostsCount').innerText = selectedDomainFilter 
+        ? `(Showing ${filtered.length} posts with ${selectedDomainFilter})` 
+        : `(Showing ${filtered.length} posts)`;
+
+      renderPosts(filtered);
+    }
+
+    function renderPosts(posts) {
+      const container = document.getElementById('postsFeedContainer');
+      container.innerHTML = '';
+
+      if (posts.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-12 border border-[#2F3336] rounded-xl bg-[#16181C]">
+            <p class="text-xs text-[#71767B]">No posts matching the selected filters.</p>
+          </div>
+        `;
+        return;
+      }
+
+      posts.forEach(p => {
+        const card = document.createElement('div');
+        card.className = "p-4 rounded-xl bg-[#16181C] border border-[#2F3336] transition-colors hover:border-[#71767B]/40";
+        
+        // Build domain badges
+        const domainBadges = (p.domains || []).map(d => `
+          <span class="text-[11px] px-2 py-0.5 rounded bg-[#1D9BF0]/15 text-[#1D9BF0] border border-[#1D9BF0]/30 font-medium">
+            ${d}
+          </span>
+        `).join('');
+
+        card.innerHTML = `
+          <div class="flex items-start justify-between gap-3 mb-2">
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-sm text-[#F7F9F9]">${globalData.profile.name || globalData.handle}</span>
+              <span class="text-xs text-[#71767B]">@${globalData.handle}</span>
+              <span class="text-xs text-[#71767B]">·</span>
+              <span class="text-xs text-[#71767B]">${formatDate(p.created_at)}</span>
+            </div>
+            ${p.post_url ? `
+              <a href="${p.post_url}" target="_blank" rel="noopener noreferrer" class="text-xs text-[#1D9BF0] hover:underline flex items-center gap-1 font-medium">
+                Post Link ?
+              </a>
+            ` : ''}
+          </div>
+
+          <div class="text-sm text-[#E7E9EA] leading-relaxed mb-3 whitespace-pre-wrap">
+            ${escapeHtml(p.text)}
+          </div>
+
+          ${p.domains && p.domains.length > 0 ? `
+            <div class="flex items-center gap-1.5 flex-wrap pt-2 border-t border-[#2F3336]/60">
+              <span class="text-[11px] text-[#71767B]">Outbound Domains:</span>
+              ${domainBadges}
+            </div>
+          ` : ''}
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function formatDate(isoStr) {
+      if (!isoStr) return '—';
+      try {
+        const d = new Date(isoStr);
+        return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      } catch {
+        return isoStr;
+      }
+    }
+
+    function escapeHtml(text) {
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+      return text.replace(/[&<>"']/g, m => map[m]);
+    }
+
+    function exportCsv() {
+      if (!globalData || !globalData.posts) return;
+      let csv = "Post URL,Date,Text,Domains,URLs\n";
+      globalData.posts.forEach(p => {
+        const cleanText = `"${p.text.replace(/"/g, '""')}"`;
+        const cleanDomains = `"${(p.domains || []).join('; ')}"`;
+        const cleanUrls = `"${(p.urls || []).join('; ')}"`;
+        csv += `${p.post_url},${p.created_at},${cleanText},${cleanDomains},${cleanUrls}\n`;
+      });
+      downloadFile(csv, `x_posts_${globalData.handle}_beginning.csv`, 'text/csv');
+    }
+
+    function exportDomainsTxt() {
+      if (!globalData || !globalData.domains) return;
+      const txt = globalData.domains.map(d => `${d.domain} (${d.count} occurrences)`).join('\n');
+      downloadFile(txt, `x_domains_${globalData.handle}.txt`, 'text/plain');
+    }
+
+    function downloadFile(content, filename, type) {
+      const blob = new Blob([content], { type });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  </script>
+</body>
+</html>
