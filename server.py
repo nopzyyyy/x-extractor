@@ -49,13 +49,11 @@ def extract_root_domain(url):
         return ""
     try:
         clean_url = url.strip().rstrip(".,;:!?)'\"")
+        if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
+            clean_url = "https://" + clean_url
+
         p = urlparse(clean_url)
         netloc = p.netloc.lower()
-        if not netloc:
-            if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
-                p = urlparse("https://" + clean_url)
-                netloc = p.netloc.lower()
-
         if not netloc:
             return ""
 
@@ -83,6 +81,45 @@ def extract_root_domain(url):
         return netloc
     except Exception:
         return ""
+
+def extract_domains_and_urls(text, anchor_items):
+    """Robustly extract external URLs and root domains from tweet text and DOM anchors."""
+    raw_text = text or ""
+    # Twitter often inserts a newline after http:// or https:// in raw innerText
+    cleaned = re.sub(r'(https?://)\s+', r'\1', raw_text)
+
+    candidates = []
+    # 1. Regex URLs from text
+    for u in re.findall(r'https?://[^\s]+', cleaned):
+        candidates.append(u)
+
+    # 2. Anchors from DOM
+    for a in anchor_items:
+        href = a.get("href") or ""
+        t = re.sub(r'(https?://)\s+', r'\1', (a.get("text") or "").strip())
+        title = (a.get("title") or "").strip()
+        if href and not href.startswith("/") and "twitter.com" not in href and "x.com" not in href:
+            if "t.co" not in href:
+                candidates.append(href)
+        if t and "." in t and " " not in t and "/" not in t:
+            candidates.append(t)
+        if title and ("http://" in title or "https://" in title):
+            candidates.append(title)
+
+    # 3. Match raw domain patterns in text (e.g., say.ly/xyz, twitpic.com/123)
+    for m in re.findall(r'\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:/[^\s]*)?', cleaned):
+        candidates.append(m)
+
+    domains = set()
+    urls = []
+    for item in candidates:
+        dom = extract_root_domain(item)
+        if dom:
+            domains.add(dom)
+            full_url = item if (item.startswith("http://") or item.startswith("https://")) else f"https://{item}"
+            urls.append(full_url)
+
+    return sorted(list(domains)), sorted(list(set(urls)))
 
 async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
     """
@@ -131,7 +168,6 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 900}
         )
-        # Apply permanent auth_token
         await context.add_cookies([{
             "name": "auth_token",
             "value": AUTH_TOKEN,
@@ -211,7 +247,6 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
         try:
             await page.wait_for_selector('article', timeout=8000)
         except Exception:
-            # Fallback: If no articles found with date range, try query without until
             if joined_year:
                 print(f"[Fallback] Trying general from:{handle} query")
                 search_url = f"https://x.com/search?q=(from:{handle})&src=typed_query&f=live"
@@ -262,29 +297,18 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
                 text = item.get("text", "")
                 raw_time = item.get("time", "")
 
-                dom_links = [l["href"] for l in item.get("links", []) if l.get("href")]
-                dom_titles = [l["title"] for l in item.get("links", []) if l.get("title") and ("http://" in l.get("title") or "https://" in l.get("title"))]
-                text_urls = re.findall(r"https?://[^\s]+", text)
+                tweet_domains, tweet_urls = extract_domains_and_urls(text, item.get("links", []))
 
-                all_candidate_urls = list(set(dom_links + dom_titles + text_urls))
-
-                tweet_domains = set()
-                tweet_clean_urls = []
-
-                for u in all_candidate_urls:
-                    dom = extract_root_domain(u)
-                    if dom:
-                        tweet_domains.add(dom)
-                        domain_counts[dom] = domain_counts.get(dom, 0) + 1
-                        tweet_clean_urls.append(u)
+                for dom in tweet_domains:
+                    domain_counts[dom] = domain_counts.get(dom, 0) + 1
 
                 posts_list.append({
                     "id": status_href.split("/")[-1] if "/status/" in status_href else "",
                     "post_url": post_url,
                     "created_at": raw_time,
                     "text": text,
-                    "urls": tweet_clean_urls,
-                    "domains": sorted(list(tweet_domains))
+                    "urls": tweet_urls,
+                    "domains": tweet_domains
                 })
 
             await page.evaluate("window.scrollBy(0, 1800)")
