@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>X Extractor — Beginning Posts & Domain Intelligence Dashboard</title>
+  <title>X Extractor — Live Timeline & Domain Intelligence Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -15,9 +15,6 @@
             darkBg: '#000000',
             darkCard: '#16181C',
             darkBorder: '#2F3336',
-            lightBg: '#F9FAFB',
-            lightCard: '#FFFFFF',
-            lightBorder: '#E5E7EB',
           }
         }
       }
@@ -31,38 +28,28 @@
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
-    .custom-scrollbar::-webkit-scrollbar {
-      width: 4px;
-      height: 4px;
-    }
-    .custom-scrollbar::-webkit-scrollbar-thumb {
-      background: #71767B;
-      border-radius: 2px;
-    }
   </style>
 </head>
 <body class="bg-black text-[#F7F9F9] min-h-screen selection:bg-[#1D9BF0]/30 transition-colors">
   
-  <!-- Main Container -->
   <div class="max-w-4xl mx-auto px-4 py-8">
     
     <!-- Top Header -->
     <header class="flex items-center justify-between pb-6 border-b border-[#2F3336]">
       <div class="flex items-center gap-3">
         <div class="w-10 h-10 rounded-full bg-[#16181C] border border-[#2F3336] flex items-center justify-center font-bold text-lg text-[#1D9BF0]">
-          ??
+          X
         </div>
         <div>
           <h1 class="text-lg font-bold tracking-tight text-[#F7F9F9] flex items-center gap-2">
-            X Extractor <span class="text-xs px-2 py-0.5 rounded-full bg-[#1D9BF0]/15 text-[#1D9BF0] font-medium border border-[#1D9BF0]/30">Dashboard</span>
+            X Extractor <span class="text-xs px-2 py-0.5 rounded-full bg-[#1D9BF0]/15 text-[#1D9BF0] font-medium border border-[#1D9BF0]/30">Live Dashboard</span>
           </h1>
           <p class="text-xs text-[#71767B]">
-            Scrapes posts from the beginning & extracts every unique outbound domain
+            Deploys headless Chromium directly to the account, scrolls the timeline, and extracts all posts & outbound domains
           </p>
         </div>
       </div>
       
-      <!-- Right Controls -->
       <div class="flex items-center gap-2">
         <span class="text-xs text-[#71767B] hidden sm:inline-block">Auth: Permanent Active</span>
         <div class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" title="X Auth Token Connected"></div>
@@ -78,8 +65,8 @@
             <input 
               type="text" 
               id="handleInput"
-              placeholder="Enter X handle (e.g. cristiano, jack, elonmusk)"
-              value="jack"
+              placeholder="Enter X handle (e.g. elonmusk, cristiano, jack)"
+              value="elonmusk"
               required
               class="w-full pl-8 pr-4 py-3 text-sm bg-[#000000] border border-[#2F3336] rounded-lg text-[#F7F9F9] focus:outline-none focus:border-[#1D9BF0] placeholder:text-[#71767B] transition-colors"
             />
@@ -90,28 +77,38 @@
             id="scrapeBtn"
             class="px-6 py-3 bg-[#1D9BF0] hover:bg-[#1A8CD8] active:opacity-90 text-white text-sm font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
           >
-            <span id="btnSpinner" class="hidden animate-spin">?</span>
-            <span id="btnText">? Scrape From Beginning</span>
+            <span id="btnSpinner" class="hidden animate-spin">&#x23F3;</span>
+            <span id="btnText">&#x1F680; Scrape Account Posts</span>
           </button>
         </div>
 
-        <!-- Quick Suggestions & Options -->
-        <div class="flex items-center justify-between flex-wrap gap-2 pt-1 text-xs text-[#71767B]">
+        <!-- Controls & Presets -->
+        <div class="flex items-center justify-between flex-wrap gap-3 pt-1 text-xs text-[#71767B]">
           <div class="flex items-center gap-1.5 flex-wrap">
             <span>Quick Presets:</span>
-            <button type="button" onclick="setHandle('jack')" class="px-2.5 py-1 rounded-md bg-[#000000] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors">@jack (2006)</button>
-            <button type="button" onclick="setHandle('cristiano')" class="px-2.5 py-1 rounded-md bg-[#000000] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors">@cristiano (2010)</button>
             <button type="button" onclick="setHandle('elonmusk')" class="px-2.5 py-1 rounded-md bg-[#000000] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors">@elonmusk</button>
+            <button type="button" onclick="setHandle('cristiano')" class="px-2.5 py-1 rounded-md bg-[#000000] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors">@cristiano</button>
+            <button type="button" onclick="setHandle('jack')" class="px-2.5 py-1 rounded-md bg-[#000000] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors">@jack</button>
           </div>
 
-          <div class="flex items-center gap-2">
-            <label for="scrollCount" class="text-xs text-[#71767B]">Scroll depth:</label>
-            <select id="scrollCount" class="bg-[#000000] border border-[#2F3336] rounded px-2 py-1 text-xs text-[#E7E9EA] focus:outline-none focus:border-[#1D9BF0]">
-              <option value="2">2 scrolls (~15-30 posts)</option>
-              <option value="4" selected>4 scrolls (~30-60 posts)</option>
-              <option value="8">8 scrolls (~60-120 posts)</option>
-              <option value="15">15 scrolls (~150+ posts)</option>
-            </select>
+          <div class="flex items-center gap-3 flex-wrap">
+            <div class="flex items-center gap-1.5">
+              <label for="scrapeMode" class="text-xs text-[#71767B]">Mode:</label>
+              <select id="scrapeMode" class="bg-[#000000] border border-[#2F3336] rounded px-2 py-1 text-xs text-[#E7E9EA] focus:outline-none focus:border-[#1D9BF0]">
+                <option value="timeline" selected>Account Timeline (All Posts)</option>
+                <option value="beginning">Founding Era (Oldest Archive)</option>
+              </select>
+            </div>
+
+            <div class="flex items-center gap-1.5">
+              <label for="scrollCount" class="text-xs text-[#71767B]">Scroll depth:</label>
+              <select id="scrollCount" class="bg-[#000000] border border-[#2F3336] rounded px-2 py-1 text-xs text-[#E7E9EA] focus:outline-none focus:border-[#1D9BF0]">
+                <option value="4">4 scrolls (~20-30 posts)</option>
+                <option value="8" selected>8 scrolls (~40-60 posts)</option>
+                <option value="15">15 scrolls (~80-120 posts)</option>
+                <option value="30">30 scrolls (~150-250+ posts)</option>
+              </select>
+            </div>
           </div>
         </div>
       </form>
@@ -120,12 +117,12 @@
       <div id="statusBox" class="hidden mt-4 pt-4 border-t border-[#2F3336]/60">
         <div class="flex items-center gap-2.5 text-xs text-[#1D9BF0]">
           <div class="w-2 h-2 rounded-full bg-[#1D9BF0] animate-ping"></div>
-          <span id="statusMessage" class="font-medium">Initializing automated Chromium browser...</span>
+          <span id="statusMessage" class="font-medium">Launching headless Chromium and scrolling profile timeline...</span>
         </div>
       </div>
     </section>
 
-    <!-- Results Section (Hidden until scraped) -->
+    <!-- Results Section -->
     <div id="resultsSection" class="hidden mt-8 space-y-6">
       
       <!-- Profile & KPI Cards -->
@@ -136,7 +133,7 @@
           <div class="min-w-0">
             <h3 id="profileName" class="text-sm font-bold truncate text-[#F7F9F9]">User</h3>
             <p id="profileHandle" class="text-xs text-[#71767B] truncate">@user</p>
-            <p id="profileJoined" class="text-[11px] text-[#1D9BF0] mt-0.5 font-medium">Joined: —</p>
+            <p id="profileJoined" class="text-[11px] text-[#1D9BF0] mt-0.5 font-medium">Joined: &mdash;</p>
           </div>
         </div>
 
@@ -144,7 +141,7 @@
         <div class="p-4 rounded-xl bg-[#16181C] border border-[#2F3336]">
           <span class="text-xs text-[#71767B] block">Total Posts</span>
           <span id="kpiPosts" class="text-xl font-bold text-[#F7F9F9] mt-1 block">0</span>
-          <span class="text-[11px] text-emerald-400 font-medium">Scraped from start</span>
+          <span class="text-[11px] text-emerald-400 font-medium">Scraped from profile</span>
         </div>
 
         <!-- Unique Domains -->
@@ -154,11 +151,11 @@
           <span class="text-[11px] text-[#71767B]">Filtered root domains</span>
         </div>
 
-        <!-- Earliest Date -->
+        <!-- Timeline Range -->
         <div class="p-4 rounded-xl bg-[#16181C] border border-[#2F3336]">
-          <span class="text-xs text-[#71767B] block">Earliest Post</span>
-          <span id="kpiEarliest" class="text-sm font-bold text-[#F7F9F9] mt-1.5 block truncate">—</span>
-          <span class="text-[11px] text-[#71767B]">Chronological origin</span>
+          <span class="text-xs text-[#71767B] block">Latest Post</span>
+          <span id="kpiLatest" class="text-sm font-bold text-[#F7F9F9] mt-1.5 block truncate">&mdash;</span>
+          <span class="text-[11px] text-[#71767B]">Timestamp</span>
         </div>
       </div>
 
@@ -184,11 +181,10 @@
       <!-- Posts Feed Header -->
       <div class="flex items-center justify-between gap-3 flex-wrap pt-2">
         <div class="flex items-center gap-2">
-          <h2 class="text-base font-bold text-[#F7F9F9]">Chronological Posts Feed</h2>
+          <h2 class="text-base font-bold text-[#F7F9F9]">Extracted Posts Feed</h2>
           <span id="filteredPostsCount" class="text-xs text-[#71767B]">(Showing all posts)</span>
         </div>
 
-        <!-- Controls: Text search & Order toggle & Exports -->
         <div class="flex items-center gap-2 flex-wrap">
           <input 
             type="text" 
@@ -202,7 +198,7 @@
             id="sortToggleBtn"
             class="px-3 py-1.5 text-xs rounded-lg bg-[#16181C] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors flex items-center gap-1.5"
           >
-            <span>?? Oldest First (Beginning)</span>
+            <span>&uarr;&darr; Newest First</span>
           </button>
           <button 
             onclick="exportCsv()" 
@@ -220,14 +216,14 @@
 
     </div>
 
-    <!-- Empty / Initial State Placeholder -->
+    <!-- Empty State Placeholder -->
     <div id="emptyPlaceholder" class="mt-16 text-center py-16 border border-dashed border-[#2F3336] rounded-xl bg-[#16181C]/40">
       <div class="w-12 h-12 rounded-full bg-[#16181C] border border-[#2F3336] flex items-center justify-center mx-auto text-[#71767B] mb-3 text-lg">
-        ??
+        &#x1F50D;
       </div>
-      <h3 class="text-sm font-semibold text-[#F7F9F9] mb-1">Ready to Scrape Account</h3>
+      <h3 class="text-sm font-semibold text-[#F7F9F9] mb-1">Ready to Scrape Account Timeline</h3>
       <p class="text-xs text-[#71767B] max-w-sm mx-auto">
-        Enter any X handle above. The automated engine navigates to the account's founding era, extracts posts from the very beginning, and filters out all outbound root domains.
+        Enter any X handle above and click Scrape. The automated headless Chromium engine visits the account, scrolls continuously through the posts, extracts every status link, and isolates unique external domains.
       </p>
     </div>
 
@@ -236,7 +232,7 @@
   <script>
     let globalData = null;
     let selectedDomainFilter = null;
-    let sortAscending = true; // Oldest first by default (from beginning)
+    let sortAscending = false; // Newest first by default for timeline
 
     function setHandle(h) {
       document.getElementById('handleInput').value = h;
@@ -246,20 +242,20 @@
       e.preventDefault();
       const handle = document.getElementById('handleInput').value.trim();
       const scrolls = parseInt(document.getElementById('scrollCount').value);
+      const mode = document.getElementById('scrapeMode').value;
       if (!handle) return;
 
-      // UI Loading state
       document.getElementById('scrapeBtn').disabled = true;
       document.getElementById('btnSpinner').classList.remove('hidden');
       document.getElementById('btnText').innerText = "Scraping...";
       document.getElementById('statusBox').classList.remove('hidden');
-      document.getElementById('statusMessage').innerText = `Connecting to X with permanent auth... Inspecting @${handle}'s profile`;
+      document.getElementById('statusMessage').innerText = `Launching headless browser... Navigating to https://x.com/${handle} and scrolling timeline`;
 
       try {
         const res = await fetch('/api/scrape', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ handle, scrolls })
+          body: JSON.stringify({ handle, scrolls, mode })
         });
 
         const data = await res.json();
@@ -274,7 +270,7 @@
       } finally {
         document.getElementById('scrapeBtn').disabled = false;
         document.getElementById('btnSpinner').classList.add('hidden');
-        document.getElementById('btnText').innerText = "? Scrape From Beginning";
+        document.getElementById('btnText').innerText = "🚀 Scrape Account Posts";
         document.getElementById('statusBox').classList.add('hidden');
       }
     }
@@ -287,14 +283,14 @@
       document.getElementById('profileAvatar').src = data.profile.avatar || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png';
       document.getElementById('profileName').innerText = data.profile.name || data.handle;
       document.getElementById('profileHandle').innerText = '@' + data.handle;
-      document.getElementById('profileJoined').innerText = `Joined: ${data.joined || 'Early Era'}`;
+      document.getElementById('profileJoined').innerText = `Joined: ${data.joined || 'Active'}`;
 
       // KPIs
       document.getElementById('kpiPosts').innerText = data.total_posts;
       document.getElementById('kpiDomains').innerText = data.unique_domains_count;
       
-      const earliest = data.posts.length > 0 ? formatDate(data.posts[0].created_at) : '—';
-      document.getElementById('kpiEarliest').innerText = earliest;
+      const latest = data.posts.length > 0 ? formatDate(data.posts[0].created_at) : '—';
+      document.getElementById('kpiLatest').innerText = latest;
 
       // Render domains
       renderDomains(data.domains);
@@ -309,7 +305,7 @@
       container.innerHTML = '';
 
       if (domains.length === 0) {
-        container.innerHTML = '<span class="text-xs text-[#71767B]">No external domains detected in these posts.</span>';
+        container.innerHTML = '<span class="text-xs text-[#71767B]">No external outbound domains detected in these posts.</span>';
         return;
       }
 
@@ -325,7 +321,7 @@
         chip.innerHTML = `
           <span onclick="filterByDomain('${d.domain}')" class="font-medium">${d.domain}</span>
           <span class="px-1.5 py-0.2 rounded-full ${isSelected ? 'bg-white/20 text-white' : 'bg-[#2F3336] text-[#71767B]'} text-[10px] font-bold">${d.count}</span>
-          <a href="${d.namecheap_url}" target="_blank" rel="noopener noreferrer" title="Check Registrar Availability on Namecheap" class="text-[#71767B] hover:text-white ml-1">?</a>
+          <a href="${d.namecheap_url}" target="_blank" rel="noopener noreferrer" title="Check Registrar Availability on Namecheap" class="text-[#71767B] hover:text-white ml-1">&nearr;</a>
         `;
         container.appendChild(chip);
       });
@@ -354,8 +350,8 @@
       sortAscending = !sortAscending;
       const btn = document.getElementById('sortToggleBtn');
       btn.innerHTML = sortAscending 
-        ? '<span>?? Oldest First (Beginning)</span>' 
-        : '<span>?? Newest First</span>';
+        ? '<span>&uarr;&darr; Oldest First (Beginning)</span>' 
+        : '<span>&uarr;&darr; Newest First</span>';
       applyFilters();
     }
 
@@ -400,7 +396,6 @@
         const card = document.createElement('div');
         card.className = "p-4 rounded-xl bg-[#16181C] border border-[#2F3336] transition-colors hover:border-[#71767B]/40";
         
-        // Build domain badges
         const domainBadges = (p.domains || []).map(d => `
           <span class="text-[11px] px-2 py-0.5 rounded bg-[#1D9BF0]/15 text-[#1D9BF0] border border-[#1D9BF0]/30 font-medium">
             ${d}
@@ -412,12 +407,12 @@
             <div class="flex items-center gap-2">
               <span class="font-bold text-sm text-[#F7F9F9]">${globalData.profile.name || globalData.handle}</span>
               <span class="text-xs text-[#71767B]">@${globalData.handle}</span>
-              <span class="text-xs text-[#71767B]">·</span>
+              <span class="text-xs text-[#71767B]">&middot;</span>
               <span class="text-xs text-[#71767B]">${formatDate(p.created_at)}</span>
             </div>
             ${p.post_url ? `
               <a href="${p.post_url}" target="_blank" rel="noopener noreferrer" class="text-xs text-[#1D9BF0] hover:underline flex items-center gap-1 font-medium">
-                Post Link ?
+                Post Link &nearr;
               </a>
             ` : ''}
           </div>
@@ -438,7 +433,7 @@
     }
 
     function formatDate(isoStr) {
-      if (!isoStr) return '—';
+      if (!isoStr) return '&mdash;';
       try {
         const d = new Date(isoStr);
         return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -461,7 +456,7 @@
         const cleanUrls = `"${(p.urls || []).join('; ')}"`;
         csv += `${p.post_url},${p.created_at},${cleanText},${cleanDomains},${cleanUrls}\n`;
       });
-      downloadFile(csv, `x_posts_${globalData.handle}_beginning.csv`, 'text/csv');
+      downloadFile(csv, `x_posts_${globalData.handle}.csv`, 'text/csv');
     }
 
     function exportDomainsTxt() {

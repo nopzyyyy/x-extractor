@@ -85,7 +85,6 @@ def extract_root_domain(url):
 def extract_domains_and_urls(text, anchor_items):
     """Robustly extract external URLs and root domains from tweet text and DOM anchors."""
     raw_text = text or ""
-    # Twitter often inserts a newline after http:// or https:// in raw innerText
     cleaned = re.sub(r'(https?://)\s+', r'\1', raw_text)
 
     candidates = []
@@ -106,7 +105,7 @@ def extract_domains_and_urls(text, anchor_items):
         if title and ("http://" in title or "https://" in title):
             candidates.append(title)
 
-    # 3. Match raw domain patterns in text (e.g., say.ly/xyz, twitpic.com/123)
+    # 3. Match raw domain patterns in text
     for m in re.findall(r'\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:/[^\s]*)?', cleaned):
         candidates.append(m)
 
@@ -121,10 +120,10 @@ def extract_domains_and_urls(text, anchor_items):
 
     return sorted(list(domains)), sorted(list(set(urls)))
 
-async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
+async def scrape_account_posts(handle, max_scrolls=8, mode="timeline"):
     """
-    Scrape user posts starting from their account creation date (oldest first).
-    Extracts all outbound URLs and filters unique root domains.
+    Deploy headless browser, navigate directly to @handle on x.com, 
+    and scroll down through the account to scrape all posts and domains.
     """
     handle = handle.lstrip("@").strip()
     if "/" in handle:
@@ -143,7 +142,7 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
             "bio": ""
         },
         "joined": "",
-        "cutoff_date": "",
+        "mode": mode,
         "total_posts": 0,
         "unique_domains_count": 0,
         "domains": [],
@@ -179,88 +178,65 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
 
         page = await context.new_page()
 
-        # Step 1: Discover Account Creation Era
-        profile_url = f"https://x.com/{handle}"
-        joined_year = None
-        joined_month = 1
+        # Step 1: Navigate directly to the profile page
+        target_url = f"https://x.com/{handle}"
+        print(f"[Scraper] Launching headless browser to: {target_url} (mode: {mode})")
 
+        await page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
         try:
-            await page.goto(profile_url, wait_until="domcontentloaded", timeout=25000)
-            try:
-                await page.wait_for_selector('[data-testid="UserProfileHeader_Items"]', timeout=8000)
-            except Exception:
-                pass
-            await asyncio.sleep(1.8)
+            await page.wait_for_selector('article', timeout=15000)
+        except Exception:
+            print("[Notice] Waiting for timeline articles to populate...")
 
-            profile_data = await page.evaluate('''() => {
-                const nameEl = document.querySelector('[data-testid="UserName"]');
-                const headerItems = document.querySelector('[data-testid="UserProfileHeader_Items"]');
-                const avatarEl = document.querySelector('img[src*="profile_images"]');
-                const bioEl = document.querySelector('[data-testid="UserDescription"]');
-                const bodyText = document.body ? document.body.innerText : '';
-                return {
-                    name: nameEl ? nameEl.innerText.split('\\n')[0] : '',
-                    headerText: headerItems ? headerItems.innerText : '',
-                    avatar: avatarEl ? avatarEl.getAttribute('src') : '',
-                    bio: bioEl ? bioEl.innerText : '',
-                    bodyText: bodyText
-                };
-            }''')
+        # Extract profile header info
+        profile_data = await page.evaluate('''() => {
+            const nameEl = document.querySelector('[data-testid="UserName"]');
+            const headerItems = document.querySelector('[data-testid="UserProfileHeader_Items"]');
+            const avatarEl = document.querySelector('img[src*="profile_images"]');
+            const bioEl = document.querySelector('[data-testid="UserDescription"]');
+            const bodyText = document.body ? document.body.innerText : '';
+            return {
+                name: nameEl ? nameEl.innerText.split('\n')[0] : '',
+                headerText: headerItems ? headerItems.innerText : '',
+                avatar: avatarEl ? avatarEl.getAttribute('src') : '',
+                bio: bioEl ? bioEl.innerText : '',
+                bodyText: bodyText
+            };
+        }''')
 
-            result["profile"]["name"] = profile_data.get("name") or handle
-            result["profile"]["avatar"] = profile_data.get("avatar") or ""
-            result["profile"]["bio"] = profile_data.get("bio") or ""
+        result["profile"]["name"] = profile_data.get("name") or handle
+        result["profile"]["avatar"] = profile_data.get("avatar") or ""
+        result["profile"]["bio"] = profile_data.get("bio") or ""
 
-            combined_text = (profile_data.get("headerText") or "") + "\n" + (profile_data.get("bodyText") or "")
-            match = re.search(r"Joined\s+([A-Za-z]+)\s+(\d{4})", combined_text, re.IGNORECASE)
-            if match:
-                m_name = match.group(1).lower()
-                joined_year = int(match.group(2))
-                joined_month = MONTH_MAP.get(m_name, 1)
-                result["joined"] = f"{match.group(1).capitalize()} {joined_year}"
-            else:
-                result["joined"] = "Early Era"
-        except Exception as e:
-            print(f"[Warning] Profile header load error: {e}")
-            result["joined"] = "Early Era"
+        combined_text = (profile_data.get("headerText") or "") + "\n" + (profile_data.get("bodyText") or "")
+        match = re.search(r"Joined\s+([A-Za-z]+)\s+(\d{4})", combined_text, re.IGNORECASE)
+        joined_year = None
+        if match:
+            m_name = match.group(1).lower()
+            joined_year = int(match.group(2))
+            result["joined"] = f"{match.group(1).capitalize()} {joined_year}"
+        else:
+            result["joined"] = "Active"
 
-        # Determine target search date range
-        if cutoff_override:
-            cutoff_date = cutoff_override
-            search_query = f"(from:{handle}) until:{cutoff_date}"
-        elif joined_year:
+        # If user explicitly selected "beginning", switch to historical search query
+        if mode == "beginning" and joined_year:
             current_year = datetime.now().year
             cutoff_year = min(joined_year + 1, current_year)
-            cutoff_date = f"{cutoff_year}-12-31"
-            search_query = f"(from:{handle}) until:{cutoff_date}"
-        else:
-            cutoff_date = "Beginning/Live"
-            search_query = f"(from:{handle})"
+            search_url = f"https://x.com/search?q=(from:{handle}) until:{cutoff_year}-12-31&src=typed_query&f=live"
+            print(f"[Scraper] Switching to founding search: {search_url}")
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
+            try:
+                await page.wait_for_selector('article', timeout=10000)
+            except Exception:
+                pass
 
-        result["cutoff_date"] = cutoff_date
-
-        # Step 2: Target Search Query from Beginning
-        search_url = f"https://x.com/search?q={search_query}&src=typed_query&f=live"
-        print(f"[Scraper] Navigating to: {search_url}")
-
-        await page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
-        try:
-            await page.wait_for_selector('article', timeout=8000)
-        except Exception:
-            if joined_year:
-                print(f"[Fallback] Trying general from:{handle} query")
-                search_url = f"https://x.com/search?q=(from:{handle})&src=typed_query&f=live"
-                await page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
-                try:
-                    await page.wait_for_selector('article', timeout=8000)
-                except Exception:
-                    pass
-
+        # Step 2: Continuous timeline scrolling & post extraction
         seen_status_urls = set()
         posts_list = []
         domain_counts = {}
+        no_new_count = 0
 
-        for _ in range(max_scrolls):
+        for scroll_idx in range(max_scrolls):
             extracted = await page.evaluate('''() => {
                 const articles = document.querySelectorAll('article');
                 return Array.from(articles).map(a => {
@@ -287,11 +263,13 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
                 });
             }''')
 
+            new_in_batch = 0
             for item in extracted:
                 status_href = item.get("statusHref", "")
                 if not status_href or status_href in seen_status_urls:
                     continue
                 seen_status_urls.add(status_href)
+                new_in_batch += 1
 
                 post_url = f"https://x.com{status_href}" if status_href.startswith("/") else status_href
                 text = item.get("text", "")
@@ -311,14 +289,23 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
                     "domains": tweet_domains
                 })
 
-            await page.evaluate("window.scrollBy(0, 1800)")
-            await asyncio.sleep(1.5)
+            print(f"[Scroll {scroll_idx + 1}/{max_scrolls}] Accumulated {len(posts_list)} posts (+{new_in_batch} new)")
+
+            if new_in_batch == 0:
+                no_new_count += 1
+                if no_new_count >= 3:
+                    print("[Scraper] No new posts detected in 3 consecutive scrolls, reached end of timeline.")
+                    break
+            else:
+                no_new_count = 0
+
+            # Scroll down for more posts
+            await page.evaluate("window.scrollBy(0, 2400)")
+            await asyncio.sleep(1.8)
 
         await browser.close()
 
-        # Sort posts strictly oldest first (Beginning -> Newer)
-        posts_list.sort(key=lambda x: x["created_at"])
-
+        # Format domain summary
         domain_summary = []
         for dom, count in sorted(domain_counts.items(), key=lambda x: x[1], reverse=True):
             domain_summary.append({
@@ -336,7 +323,7 @@ async def scrape_x_from_beginning(handle, max_scrolls=4, cutoff_override=None):
 
 @app.route("/")
 def index():
-    return render_template("index.html", default_handle="cristiano")
+    return render_template("index.html", default_handle="elonmusk")
 
 @app.route("/api/scrape", methods=["POST"])
 def api_scrape():
@@ -345,11 +332,12 @@ def api_scrape():
     if not handle:
         return jsonify({"error": "Handle is required"}), 400
 
-    scrolls = int(data.get("scrolls", 4))
-    scrolls = max(1, min(scrolls, 25))
+    scrolls = int(data.get("scrolls", 8))
+    scrolls = max(2, min(scrolls, 50))
+    mode = data.get("mode", "timeline")
 
     try:
-        scraped_data = asyncio.run(scrape_x_from_beginning(handle, max_scrolls=scrolls))
+        scraped_data = asyncio.run(scrape_account_posts(handle, max_scrolls=scrolls, mode=mode))
         return jsonify(scraped_data)
     except Exception as e:
         import traceback
