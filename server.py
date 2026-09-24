@@ -224,8 +224,9 @@ def extract_root_domain(url):
         return ""
 
 def extract_domains_and_urls(text, anchor_items):
-    """Robustly extract external URLs and root domains from tweet text and DOM anchors."""
+    """Robustly extract external URLs and root domains from tweet text, cards, and DOM anchors."""
     raw_text = text or ""
+    # Normalize spaced protocols e.g. "http:// \n shtg.co" -> "http://shtg.co"
     cleaned = re.sub(r'(https?://)\s+', r'\1', raw_text)
 
     candidates = []
@@ -233,18 +234,29 @@ def extract_domains_and_urls(text, anchor_items):
     for u in re.findall(r'https?://[^\s]+', cleaned):
         candidates.append(u)
 
-    # 2. Anchors from DOM
+    # 2. Anchors and cards from DOM
     for a in anchor_items:
-        href = a.get("href") or ""
+        href = (a.get("href") or "").strip()
         t = re.sub(r'(https?://)\s+', r'\1', (a.get("text") or "").strip())
         title = (a.get("title") or "").strip()
+        aria = (a.get("aria") or "").strip()
+
+        # Check href (if not relative and not internal twitter/x)
         if href and not href.startswith("/") and "twitter.com" not in href and "x.com" not in href:
             if "t.co" not in href:
                 candidates.append(href)
-        if t and "." in t and " " not in t and "/" not in t:
-            candidates.append(t)
-        if title and ("http://" in title or "https://" in title):
-            candidates.append(title)
+
+        # Check title & aria-label (Twitter embeds destination URL in title/aria-label for t.co links)
+        for attr in (title, aria):
+            if attr and ("http://" in attr or "https://" in attr or "." in attr):
+                candidates.append(attr)
+
+        # Check anchor text tokens (e.g. "shtg.co/l/t1CQpaw", "youtube.com/watch?v=...", "who.int")
+        if t:
+            for token in t.split():
+                token = token.strip()
+                if "." in token and len(token) > 3:
+                    candidates.append(token)
 
     # 3. Match raw domain patterns in text
     for m in re.findall(r'\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:/[^\s]*)?', cleaned):
@@ -273,10 +285,11 @@ def update_scan_progress(scan_id, percent, details, posts_count=0, domains_count
         except Exception:
             pass
 
-async def scrape_full_account(handle, scan_id=None, max_posts_cap=1000):
+async def scrape_full_account(handle, scan_id=None, max_posts_cap=None):
     """
     Deploys headless browser to x.com/{handle} and loops continuously scrolling down 
-    until the bottom of the account is reached or force stop is triggered.
+    until the bottom of the account is reached (no post cap, no scroll cap) or force stop is triggered.
+    If the direct timeline pauses before reaching account creation year, seamlessly bridges via historical search archive.
     Reports real-time progress percentages to ACTIVE_SCANS.
     """
     # Clean handle of any leading @ or URL parts
@@ -302,6 +315,7 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=1000):
             "bio": ""
         },
         "joined": "",
+        "joined_year": 0,
         "stopped_early": False,
         "total_posts": 0,
         "unique_domains_count": 0,
@@ -383,28 +397,33 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=1000):
         combined_text = (profile_data.get("headerText") or "") + "\n" + (profile_data.get("bodyText") or "")
         match = re.search(r"Joined\s+([A-Za-z]+)\s+(\d{4})", combined_text, re.IGNORECASE)
         if match:
-            m_name = match.group(1).lower()
             joined_year = int(match.group(2))
             result["joined"] = f"{match.group(1).capitalize()} {joined_year}"
+            result["joined_year"] = joined_year
         else:
+            joined_year = 0
             result["joined"] = "Active"
 
-        # Continuous scroll loop with Force Stop & live progress
+        # Continuous scroll loop with Force Stop & live progress (NO post cap, NO scroll cap)
         seen_status_urls = set()
         posts_list = []
         domain_counts = {}
         empty_rounds = 0
         scroll_round = 0
-        max_scroll_attempts = 200
+        oldest_time = ""
 
-        print(f"[Scraper] Continuous scan running for @{handle}...")
-        update_scan_progress(scan_id, 30, f"Scanning timeline posts for @{handle}...", 0, 0)
+        print(f"[Scraper] Continuous scan running for @{handle} (unlimited depth, no cap)...")
+        update_scan_progress(scan_id, 28, f"Scanning timeline posts for @{handle}...", 0, 0)
 
-        while empty_rounds < 4 and len(posts_list) < max_posts_cap and scroll_round < max_scroll_attempts:
+        while empty_rounds < 8:
             if scan_id and ACTIVE_SCANS.get(scan_id, {}).get("stop"):
                 print(f"[Scraper] Force stop triggered for {scan_id}. Preserving {len(posts_list)} posts.")
                 result["stopped_early"] = True
                 update_scan_progress(scan_id, 96, f"Force stop received. Finalizing {len(posts_list)} posts...", len(posts_list), len(domain_counts))
+                break
+
+            if max_posts_cap and len(posts_list) >= max_posts_cap:
+                print(f"[Scraper] Reached optional post limit: {max_posts_cap}")
                 break
 
             scroll_round += 1
@@ -416,14 +435,26 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=1000):
                     const statusLink = a.querySelector('a[href*="/status/"]');
 
                     const links = [];
+                    // 1. Text links
                     if (textEl) {
                         textEl.querySelectorAll('a').forEach(l => {
                             const href = l.getAttribute('href') || '';
                             const text = l.innerText || '';
                             const title = l.getAttribute('title') || '';
-                            if (href) links.push({ href, text, title });
+                            const aria = l.getAttribute('aria-label') || '';
+                            if (href || text || title || aria) links.push({ href, text, title, aria });
                         });
                     }
+                    // 2. Outbound card links & preview anchors
+                    a.querySelectorAll('a[target="_blank"], [data-testid*="card"] a, a[role="link"]').forEach(l => {
+                        const href = l.getAttribute('href') || '';
+                        const text = l.innerText || '';
+                        const title = l.getAttribute('title') || '';
+                        const aria = l.getAttribute('aria-label') || '';
+                        if (href && !href.includes('/status/') && !href.match(/^\\/[a-zA-Z0-9_]+$/)) {
+                            links.push({ href, text, title, aria });
+                        }
+                    });
 
                     return {
                         text: textEl ? textEl.innerText : '',
@@ -451,6 +482,8 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=1000):
                 post_url = f"https://x.com{status_href}" if status_href.startswith("/") else status_href
                 text = item.get("text", "")
                 raw_time = item.get("time", "")
+                if raw_time:
+                    oldest_time = raw_time
 
                 tweet_domains, tweet_urls = extract_domains_and_urls(text, item.get("links", []))
 
@@ -468,17 +501,48 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=1000):
 
             if new_in_batch == 0:
                 empty_rounds += 1
+                # If direct timeline stops before account creation year, pivot to historical search!
+                if empty_rounds >= 6 and oldest_time and joined_year and not (scan_id and ACTIVE_SCANS.get(scan_id, {}).get("stop")):
+                    try:
+                        oldest_year = int(oldest_time[:4])
+                    except Exception:
+                        oldest_year = 0
+                    if oldest_year > joined_year and oldest_year > 2006:
+                        oldest_date = oldest_time.split("T")[0]
+                        print(f"[Scraper] Timeline paused at {oldest_date}. Continuing through search archive to reach {joined_year}...")
+                        update_scan_progress(scan_id, 80, f"Timeline reached {oldest_date}. Bridging search archive to {joined_year}...", len(posts_list), len(domain_counts))
+                        search_url = f"https://x.com/search?q=from%3A{handle}%20until%3A{oldest_date}&f=live"
+                        try:
+                            await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+                            await asyncio.sleep(2.0)
+                            empty_rounds = 0
+                            continue
+                        except Exception as e:
+                            print(f"[Scraper] Search continuation error: {e}")
             else:
                 empty_rounds = 0
 
-            # Compute progress percentage smoothly up to 92%
-            progress_pct = min(92, 30 + int(scroll_round * 3.5))
-            detail_msg = f"Scrolling timeline • Round {scroll_round} • Captured {len(posts_list)} posts • {len(domain_counts)} unique domains"
+            # Dynamic progress % based on years covered from 2026 down to joined_year
+            current_year = datetime.utcnow().year
+            if oldest_time and joined_year and 2005 < joined_year <= current_year:
+                try:
+                    cur_post_year = int(oldest_time[:4])
+                    total_years = max(1, current_year - joined_year)
+                    covered_years = max(0, min(total_years, current_year - cur_post_year))
+                    progress_pct = min(95, 28 + int((covered_years / total_years) * 67))
+                except Exception:
+                    progress_pct = min(95, 28 + int(67 * (1 - (0.998 ** scroll_round))))
+            else:
+                progress_pct = min(95, 28 + int(67 * (1 - (0.998 ** scroll_round))))
+
+            detail_msg = f"Scanning timeline • Round {scroll_round} • Captured {len(posts_list)} posts • {len(domain_counts)} unique domains"
+            if oldest_time:
+                detail_msg = f"Scanning timeline (reached {oldest_time[:10]}) • {len(posts_list)} posts • {len(domain_counts)} unique domains"
             update_scan_progress(scan_id, progress_pct, detail_msg, len(posts_list), len(domain_counts))
 
             # Scroll down and wait for render with sub-second stop check
-            await page.evaluate("window.scrollBy(0, 3200)")
-            for _ in range(13):
+            await page.evaluate("window.scrollBy(0, 3400)")
+            for _ in range(12):
                 if scan_id and ACTIVE_SCANS.get(scan_id, {}).get("stop"):
                     break
                 await asyncio.sleep(0.1)
@@ -549,8 +613,8 @@ def api_scan_start():
         return jsonify({"error": "Handle is required"}), 400
 
     scan_id = data.get("scan_id") or f"scan_{int(datetime.utcnow().timestamp()*1000)}"
-    max_posts = int(data.get("max_posts", 1000))
-    max_posts = max(10, min(max_posts, 5000))
+    raw_max = data.get("max_posts")
+    max_posts = int(raw_max) if raw_max and int(raw_max) > 0 else None
 
     ACTIVE_SCANS[scan_id] = {
         "stop": False,
@@ -649,7 +713,8 @@ def api_scrape():
     if not handle:
         return jsonify({"error": "Handle is required"}), 400
     scan_id = data.get("scan_id") or f"scan_{int(datetime.utcnow().timestamp()*1000)}"
-    max_posts = int(data.get("max_posts", 1000))
+    raw_max = data.get("max_posts")
+    max_posts = int(raw_max) if raw_max and int(raw_max) > 0 else None
     create_scan_record(scan_id, handle)
     try:
         scraped_data = asyncio.run(scrape_full_account(handle, scan_id=scan_id, max_posts_cap=max_posts))
