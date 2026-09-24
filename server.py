@@ -120,10 +120,10 @@ def extract_domains_and_urls(text, anchor_items):
 
     return sorted(list(domains)), sorted(list(set(urls)))
 
-async def scrape_account_posts(handle, max_scrolls=8, mode="timeline"):
+async def scrape_full_account(handle, max_posts_cap=500):
     """
-    Deploy headless browser, navigate directly to @handle on x.com, 
-    and scroll down through the account to scrape all posts and domains.
+    Deploys headless browser to x.com/{handle} and loops continuously scrolling down 
+    until the bottom of the account is reached (or safety cap), collecting ALL posts and domains.
     """
     handle = handle.lstrip("@").strip()
     if "/" in handle:
@@ -142,7 +142,6 @@ async def scrape_account_posts(handle, max_scrolls=8, mode="timeline"):
             "bio": ""
         },
         "joined": "",
-        "mode": mode,
         "total_posts": 0,
         "unique_domains_count": 0,
         "domains": [],
@@ -178,17 +177,17 @@ async def scrape_account_posts(handle, max_scrolls=8, mode="timeline"):
 
         page = await context.new_page()
 
-        # Step 1: Navigate directly to the profile page
+        # Navigate directly to user profile
         target_url = f"https://x.com/{handle}"
-        print(f"[Scraper] Launching headless browser to: {target_url} (mode: {mode})")
+        print(f"[Scraper] Navigating to account: {target_url}")
 
         await page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
         try:
             await page.wait_for_selector('article', timeout=15000)
         except Exception:
-            print("[Notice] Waiting for timeline articles to populate...")
+            print("[Notice] Waiting for initial timeline articles...")
 
-        # Extract profile header info
+        # Extract profile details
         profile_data = await page.evaluate('''() => {
             const nameEl = document.querySelector('[data-testid="UserName"]');
             const headerItems = document.querySelector('[data-testid="UserProfileHeader_Items"]');
@@ -196,7 +195,7 @@ async def scrape_account_posts(handle, max_scrolls=8, mode="timeline"):
             const bioEl = document.querySelector('[data-testid="UserDescription"]');
             const bodyText = document.body ? document.body.innerText : '';
             return {
-                name: nameEl ? nameEl.innerText.split(String.fromCharCode(10))[0] : '',
+                name: (nameEl ? nameEl.innerText : '').split(String.fromCharCode(10))[0],
                 headerText: headerItems ? headerItems.innerText : '',
                 avatar: avatarEl ? avatarEl.getAttribute('src') : '',
                 bio: bioEl ? bioEl.innerText : '',
@@ -210,7 +209,6 @@ async def scrape_account_posts(handle, max_scrolls=8, mode="timeline"):
 
         combined_text = (profile_data.get("headerText") or "") + "\n" + (profile_data.get("bodyText") or "")
         match = re.search(r"Joined\s+([A-Za-z]+)\s+(\d{4})", combined_text, re.IGNORECASE)
-        joined_year = None
         if match:
             m_name = match.group(1).lower()
             joined_year = int(match.group(2))
@@ -218,25 +216,18 @@ async def scrape_account_posts(handle, max_scrolls=8, mode="timeline"):
         else:
             result["joined"] = "Active"
 
-        # If user explicitly selected "beginning", switch to historical search query
-        if mode == "beginning" and joined_year:
-            current_year = datetime.now().year
-            cutoff_year = min(joined_year + 1, current_year)
-            search_url = f"https://x.com/search?q=(from:{handle}) until:{cutoff_year}-12-31&src=typed_query&f=live"
-            print(f"[Scraper] Switching to founding search: {search_url}")
-            await page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
-            try:
-                await page.wait_for_selector('article', timeout=10000)
-            except Exception:
-                pass
-
-        # Step 2: Continuous timeline scrolling & post extraction
+        # Continuous scroll loop: scroll down until the end of the timeline is reached
         seen_status_urls = set()
         posts_list = []
         domain_counts = {}
-        no_new_count = 0
+        empty_rounds = 0
+        scroll_round = 0
+        max_scroll_attempts = 150  # generous safety cap for automated scrolling
 
-        for scroll_idx in range(max_scrolls):
+        print(f"[Scraper] Starting full account scan for @{handle}...")
+
+        while empty_rounds < 4 and len(posts_list) < max_posts_cap and scroll_round < max_scroll_attempts:
+            scroll_round += 1
             extracted = await page.evaluate('''() => {
                 const articles = document.querySelectorAll('article');
                 return Array.from(articles).map(a => {
@@ -289,23 +280,20 @@ async def scrape_account_posts(handle, max_scrolls=8, mode="timeline"):
                     "domains": tweet_domains
                 })
 
-            print(f"[Scroll {scroll_idx + 1}/{max_scrolls}] Accumulated {len(posts_list)} posts (+{new_in_batch} new)")
-
             if new_in_batch == 0:
-                no_new_count += 1
-                if no_new_count >= 3:
-                    print("[Scraper] No new posts detected in 3 consecutive scrolls, reached end of timeline.")
-                    break
+                empty_rounds += 1
             else:
-                no_new_count = 0
+                empty_rounds = 0
 
-            # Scroll down for more posts
-            await page.evaluate("window.scrollBy(0, 2400)")
-            await asyncio.sleep(1.8)
+            print(f"[Scan Progress] Round {scroll_round}: +{new_in_batch} new posts | Total: {len(posts_list)}")
+
+            # Scroll down
+            await page.evaluate("window.scrollBy(0, 3200)")
+            await asyncio.sleep(1.4)
 
         await browser.close()
+        print(f"[Scraper] Scan finished for @{handle}. Total unique posts: {len(posts_list)}")
 
-        # Format domain summary
         domain_summary = []
         for dom, count in sorted(domain_counts.items(), key=lambda x: x[1], reverse=True):
             domain_summary.append({
@@ -332,12 +320,11 @@ def api_scrape():
     if not handle:
         return jsonify({"error": "Handle is required"}), 400
 
-    scrolls = int(data.get("scrolls", 8))
-    scrolls = max(2, min(scrolls, 50))
-    mode = data.get("mode", "timeline")
+    max_posts = int(data.get("max_posts", 500))
+    max_posts = max(10, min(max_posts, 2000))
 
     try:
-        scraped_data = asyncio.run(scrape_account_posts(handle, max_scrolls=scrolls, mode=mode))
+        scraped_data = asyncio.run(scrape_full_account(handle, max_posts_cap=max_posts))
         return jsonify(scraped_data)
     except Exception as e:
         import traceback

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>X Extractor — Live Timeline & Domain Intelligence Dashboard</title>
+  <title>X Extractor — Full Account Scanner & Domain Intelligence Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -42,10 +42,10 @@
         </div>
         <div>
           <h1 class="text-lg font-bold tracking-tight text-[#F7F9F9] flex items-center gap-2">
-            X Extractor <span class="text-xs px-2 py-0.5 rounded-full bg-[#1D9BF0]/15 text-[#1D9BF0] font-medium border border-[#1D9BF0]/30">Live Dashboard</span>
+            X Extractor <span class="text-xs px-2 py-0.5 rounded-full bg-[#1D9BF0]/15 text-[#1D9BF0] font-medium border border-[#1D9BF0]/30">Full Account Scanner</span>
           </h1>
           <p class="text-xs text-[#71767B]">
-            Deploys headless Chromium directly to the account, scrolls the timeline, and extracts all posts & outbound domains
+            Autonomous headless Chromium scraper &mdash; navigates directly to the profile and continuously scrolls until the entire account is scraped
           </p>
         </div>
       </div>
@@ -78,11 +78,11 @@
             class="px-6 py-3 bg-[#1D9BF0] hover:bg-[#1A8CD8] active:opacity-90 text-white text-sm font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
           >
             <span id="btnSpinner" class="hidden animate-spin">&#x23F3;</span>
-            <span id="btnText">&#x1F680; Scrape Account Posts</span>
+            <span id="btnText">&#x1F680; Scan Full Account</span>
           </button>
         </div>
 
-        <!-- Controls & Presets -->
+        <!-- Presets -->
         <div class="flex items-center justify-between flex-wrap gap-3 pt-1 text-xs text-[#71767B]">
           <div class="flex items-center gap-1.5 flex-wrap">
             <span>Quick Presets:</span>
@@ -91,24 +91,8 @@
             <button type="button" onclick="setHandle('jack')" class="px-2.5 py-1 rounded-md bg-[#000000] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors">@jack</button>
           </div>
 
-          <div class="flex items-center gap-3 flex-wrap">
-            <div class="flex items-center gap-1.5">
-              <label for="scrapeMode" class="text-xs text-[#71767B]">Mode:</label>
-              <select id="scrapeMode" class="bg-[#000000] border border-[#2F3336] rounded px-2 py-1 text-xs text-[#E7E9EA] focus:outline-none focus:border-[#1D9BF0]">
-                <option value="timeline" selected>Account Timeline (All Posts)</option>
-                <option value="beginning">Founding Era (Oldest Archive)</option>
-              </select>
-            </div>
-
-            <div class="flex items-center gap-1.5">
-              <label for="scrollCount" class="text-xs text-[#71767B]">Scroll depth:</label>
-              <select id="scrollCount" class="bg-[#000000] border border-[#2F3336] rounded px-2 py-1 text-xs text-[#E7E9EA] focus:outline-none focus:border-[#1D9BF0]">
-                <option value="4">4 scrolls (~20-30 posts)</option>
-                <option value="8" selected>8 scrolls (~40-60 posts)</option>
-                <option value="15">15 scrolls (~80-120 posts)</option>
-                <option value="30">30 scrolls (~150-250+ posts)</option>
-              </select>
-            </div>
+          <div class="text-xs text-[#71767B]">
+            Automated continuous scroll &bull; Extracts every post &bull; Filters external domains
           </div>
         </div>
       </form>
@@ -141,7 +125,7 @@
         <div class="p-4 rounded-xl bg-[#16181C] border border-[#2F3336]">
           <span class="text-xs text-[#71767B] block">Total Posts</span>
           <span id="kpiPosts" class="text-xl font-bold text-[#F7F9F9] mt-1 block">0</span>
-          <span class="text-[11px] text-emerald-400 font-medium">Scraped from profile</span>
+          <span class="text-[11px] text-emerald-400 font-medium">Scraped from account</span>
         </div>
 
         <!-- Unique Domains -->
@@ -181,7 +165,7 @@
       <!-- Posts Feed Header -->
       <div class="flex items-center justify-between gap-3 flex-wrap pt-2">
         <div class="flex items-center gap-2">
-          <h2 class="text-base font-bold text-[#F7F9F9]">Extracted Posts Feed</h2>
+          <h2 class="text-base font-bold text-[#F7F9F9]">Scraped Posts Feed</h2>
           <span id="filteredPostsCount" class="text-xs text-[#71767B]">(Showing all posts)</span>
         </div>
 
@@ -221,9 +205,9 @@
       <div class="w-12 h-12 rounded-full bg-[#16181C] border border-[#2F3336] flex items-center justify-center mx-auto text-[#71767B] mb-3 text-lg">
         &#x1F50D;
       </div>
-      <h3 class="text-sm font-semibold text-[#F7F9F9] mb-1">Ready to Scrape Account Timeline</h3>
+      <h3 class="text-sm font-semibold text-[#F7F9F9] mb-1">Ready to Scan Account</h3>
       <p class="text-xs text-[#71767B] max-w-sm mx-auto">
-        Enter any X handle above and click Scrape. The automated headless Chromium engine visits the account, scrolls continuously through the posts, extracts every status link, and isolates unique external domains.
+        Enter any X handle above and click Scan. The headless Chromium engine visits the account, continuously scrolls until all posts on the account are captured, and filters out all external outbound domains.
       </p>
     </div>
 
@@ -232,7 +216,7 @@
   <script>
     let globalData = null;
     let selectedDomainFilter = null;
-    let sortAscending = false; // Newest first by default for timeline
+    let sortAscending = false;
 
     function setHandle(h) {
       document.getElementById('handleInput').value = h;
@@ -241,36 +225,34 @@
     async function handleScrape(e) {
       e.preventDefault();
       const handle = document.getElementById('handleInput').value.trim();
-      const scrolls = parseInt(document.getElementById('scrollCount').value);
-      const mode = document.getElementById('scrapeMode').value;
       if (!handle) return;
 
       document.getElementById('scrapeBtn').disabled = true;
       document.getElementById('btnSpinner').classList.remove('hidden');
-      document.getElementById('btnText').innerText = "Scraping...";
+      document.getElementById('btnText').innerText = "Scanning Account...";
       document.getElementById('statusBox').classList.remove('hidden');
-      document.getElementById('statusMessage').innerText = `Launching headless browser... Navigating to https://x.com/${handle} and scrolling timeline`;
+      document.getElementById('statusMessage').innerText = `Headless browser scanning @${handle}... Scrolling timeline to scrape all posts`;
 
       try {
         const res = await fetch('/api/scrape', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ handle, scrolls, mode })
+          body: JSON.stringify({ handle })
         });
 
         const data = await res.json();
         if (!res.ok) {
-          throw new Error(data.error || "Failed to scrape profile");
+          throw new Error(data.error || "Failed to scan account");
         }
 
         globalData = data;
         renderDashboard(data);
       } catch (err) {
-        alert("Scraping error: " + err.message);
+        alert("Scan error: " + err.message);
       } finally {
         document.getElementById('scrapeBtn').disabled = false;
         document.getElementById('btnSpinner').classList.add('hidden');
-        document.getElementById('btnText').innerText = "🚀 Scrape Account Posts";
+        document.getElementById('btnText').innerText = "🚀 Scan Full Account";
         document.getElementById('statusBox').classList.add('hidden');
       }
     }
@@ -279,23 +261,18 @@
       document.getElementById('emptyPlaceholder').classList.add('hidden');
       document.getElementById('resultsSection').classList.remove('hidden');
 
-      // Profile details
       document.getElementById('profileAvatar').src = data.profile.avatar || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png';
       document.getElementById('profileName').innerText = data.profile.name || data.handle;
       document.getElementById('profileHandle').innerText = '@' + data.handle;
       document.getElementById('profileJoined').innerText = `Joined: ${data.joined || 'Active'}`;
 
-      // KPIs
       document.getElementById('kpiPosts').innerText = data.total_posts;
       document.getElementById('kpiDomains').innerText = data.unique_domains_count;
       
       const latest = data.posts.length > 0 ? formatDate(data.posts[0].created_at) : '—';
       document.getElementById('kpiLatest').innerText = latest;
 
-      // Render domains
       renderDomains(data.domains);
-
-      // Render feed
       applyFilters();
     }
 
@@ -365,7 +342,6 @@
         return matchesSearch && matchesDomain;
       });
 
-      // Sort
       filtered.sort((a, b) => {
         const dateA = new Date(a.created_at).getTime();
         const dateB = new Date(b.created_at).getTime();
