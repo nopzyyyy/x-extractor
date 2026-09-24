@@ -2,6 +2,8 @@ import os
 import re
 import sys
 import json
+import sqlite3
+import threading
 import asyncio
 from datetime import datetime
 from urllib.parse import urlparse
@@ -16,6 +18,142 @@ AUTH_TOKEN = os.environ.get("X_AUTH_TOKEN", DEFAULT_AUTH_TOKEN)
 
 # Active scan tracker for live progress & force stop
 ACTIVE_SCANS = {}
+
+# SQLite Central Database Setup
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scans.db")
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH, timeout=20.0)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    with conn:
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS scans (
+                id TEXT PRIMARY KEY,
+                handle TEXT NOT NULL,
+                status TEXT NOT NULL,
+                percent INTEGER DEFAULT 0,
+                details TEXT DEFAULT '',
+                posts_count INTEGER DEFAULT 0,
+                domains_count INTEGER DEFAULT 0,
+                profile_name TEXT DEFAULT '',
+                profile_avatar TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                result_json TEXT DEFAULT NULL,
+                error TEXT DEFAULT NULL
+            )
+        """)
+    conn.close()
+
+init_db()
+
+def create_scan_record(scan_id, handle):
+    now = datetime.utcnow().isoformat() + "Z"
+    conn = get_db_connection()
+    with conn:
+        conn.execute("""
+            INSERT INTO scans (id, handle, status, percent, details, posts_count, domains_count, created_at, updated_at)
+            VALUES (?, ?, 'running', 5, 'Initializing headless Chromium with authenticated session...', 0, 0, ?, ?)
+        """, (scan_id, handle, now, now))
+    conn.close()
+
+def update_scan_progress_db(scan_id, percent, details, posts_count=0, domains_count=0, profile_name=None, profile_avatar=None):
+    now = datetime.utcnow().isoformat() + "Z"
+    conn = get_db_connection()
+    with conn:
+        if profile_name is not None and profile_avatar is not None:
+            conn.execute("""
+                UPDATE scans 
+                SET percent = ?, details = ?, posts_count = ?, domains_count = ?, profile_name = ?, profile_avatar = ?, updated_at = ?
+                WHERE id = ?
+            """, (percent, details, posts_count, domains_count, profile_name, profile_avatar, now, scan_id))
+        else:
+            conn.execute("""
+                UPDATE scans 
+                SET percent = ?, details = ?, posts_count = ?, domains_count = ?, updated_at = ?
+                WHERE id = ?
+            """, (percent, details, posts_count, domains_count, now, scan_id))
+    conn.close()
+
+def complete_scan_record(scan_id, result_dict, status="completed"):
+    now = datetime.utcnow().isoformat() + "Z"
+    profile = result_dict.get("profile", {})
+    profile_name = profile.get("name", "")
+    profile_avatar = profile.get("avatar", "")
+    posts_count = result_dict.get("total_posts", len(result_dict.get("posts", [])))
+    domains_count = result_dict.get("unique_domains_count", len(result_dict.get("domains", [])))
+
+    conn = get_db_connection()
+    with conn:
+        conn.execute("""
+            UPDATE scans 
+            SET status = ?, percent = 100, details = ?, posts_count = ?, domains_count = ?,
+                profile_name = COALESCE(NULLIF(?, ''), profile_name),
+                profile_avatar = COALESCE(NULLIF(?, ''), profile_avatar),
+                result_json = ?, updated_at = ?
+            WHERE id = ?
+        """, (status, f"Completed with {posts_count} posts and {domains_count} domains.",
+              posts_count, domains_count, profile_name, profile_avatar, json.dumps(result_dict), now, scan_id))
+    conn.close()
+
+def fail_scan_record(scan_id, error_msg):
+    now = datetime.utcnow().isoformat() + "Z"
+    conn = get_db_connection()
+    with conn:
+        conn.execute("""
+            UPDATE scans 
+            SET status = 'failed', details = ?, error = ?, updated_at = ?
+            WHERE id = ?
+        """, (f"Error: {error_msg}", error_msg, now, scan_id))
+    conn.close()
+
+def get_scan_record(scan_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM scans WHERE id = ?", (scan_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    d = dict(row)
+    if d.get("result_json"):
+        try:
+            d["data"] = json.loads(d["result_json"])
+        except Exception:
+            d["data"] = None
+    else:
+        d["data"] = None
+    return d
+
+def list_all_scans():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, handle, status, percent, details, posts_count, domains_count, 
+               profile_name, profile_avatar, created_at, updated_at, error
+        FROM scans 
+        ORDER BY created_at DESC
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def delete_scan_record(scan_id):
+    conn = get_db_connection()
+    with conn:
+        conn.execute("DELETE FROM scans WHERE id = ?", (scan_id,))
+    conn.close()
+
+def clear_all_scans():
+    conn = get_db_connection()
+    with conn:
+        conn.execute("DELETE FROM scans")
+    conn.close()
 
 MONTH_MAP = {
     "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
@@ -129,6 +267,11 @@ def update_scan_progress(scan_id, percent, details, posts_count=0, domains_count
         ACTIVE_SCANS[scan_id]["details"] = details
         ACTIVE_SCANS[scan_id]["posts_count"] = posts_count
         ACTIVE_SCANS[scan_id]["domains_count"] = domains_count
+    if scan_id:
+        try:
+            update_scan_progress_db(scan_id, percent, details, posts_count, domains_count)
+        except Exception:
+            pass
 
 async def scrape_full_account(handle, scan_id=None, max_posts_cap=1000):
     """
@@ -226,6 +369,16 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=1000):
         result["profile"]["name"] = profile_data.get("name") or handle
         result["profile"]["avatar"] = profile_data.get("avatar") or ""
         result["profile"]["bio"] = profile_data.get("bio") or ""
+
+        if scan_id:
+            try:
+                update_scan_progress_db(
+                    scan_id, 25, f"Extracting account metadata for @{handle}...",
+                    profile_name=result["profile"]["name"],
+                    profile_avatar=result["profile"]["avatar"]
+                )
+            except Exception:
+                pass
 
         combined_text = (profile_data.get("headerText") or "") + "\n" + (profile_data.get("bodyText") or "")
         match = re.search(r"Joined\s+([A-Za-z]+)\s+(\d{4})", combined_text, re.IGNORECASE)
@@ -338,46 +491,160 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=1000):
         result["unique_domains_count"] = len(domain_summary)
 
         update_scan_progress(scan_id, 100, f"Completed! Captured {len(posts_list)} posts and {len(domain_summary)} domains.", len(posts_list), len(domain_summary))
+        status = "stopped" if result.get("stopped_early") else "completed"
+        if scan_id:
+            try:
+                complete_scan_record(scan_id, result, status=status)
+            except Exception as e:
+                print(f"[DB] Error completing scan: {e}")
         return result
 
 @app.route("/")
 def index():
     return render_template("index.html", default_handle="elonmusk")
 
-@app.route("/api/scrape", methods=["POST"])
-def api_scrape():
+@app.route("/api/scans")
+def api_scans():
+    """List all saved scans in the SQLite database across all devices/users."""
+    scans = list_all_scans()
+    # Overlay live memory progress for active scans
+    for s in scans:
+        s_id = s.get("id")
+        if s_id in ACTIVE_SCANS:
+            s["percent"] = ACTIVE_SCANS[s_id].get("percent", s["percent"])
+            s["details"] = ACTIVE_SCANS[s_id].get("details", s["details"])
+            s["posts_count"] = ACTIVE_SCANS[s_id].get("posts_count", s["posts_count"])
+            s["domains_count"] = ACTIVE_SCANS[s_id].get("domains_count", s["domains_count"])
+            s["status"] = "running"
+    return jsonify(scans)
+
+@app.route("/api/scan/start", methods=["POST"])
+def api_scan_start():
+    """
+    Launch an autonomous background scan thread on the VPS.
+    Returns immediately so client browser/tab closure does not interrupt scraping.
+    """
     data = request.get_json() or {}
-    handle = data.get("handle", "").strip()
+    handle = (data.get("handle") or "").strip().lstrip("@")
+    while handle.startswith("@"):
+        handle = handle[1:]
+    if "/" in handle:
+        handle = handle.rstrip("/").split("/")[-1].lstrip("@")
+
     if not handle:
         return jsonify({"error": "Handle is required"}), 400
 
     scan_id = data.get("scan_id") or f"scan_{int(datetime.utcnow().timestamp()*1000)}"
+    max_posts = int(data.get("max_posts", 1000))
+    max_posts = max(10, min(max_posts, 5000))
+
     ACTIVE_SCANS[scan_id] = {
         "stop": False,
         "percent": 5,
-        "details": "Initializing headless Chromium...",
+        "details": "Initializing headless Chromium with authenticated session...",
         "posts_count": 0,
         "domains_count": 0
     }
 
-    max_posts = int(data.get("max_posts", 1000))
-    max_posts = max(10, min(max_posts, 5000))
+    create_scan_record(scan_id, handle)
 
+    def worker_thread(s_id, h_name, m_posts):
+        try:
+            asyncio.run(scrape_full_account(h_name, scan_id=s_id, max_posts_cap=m_posts))
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            fail_scan_record(s_id, str(exc))
+        finally:
+            ACTIVE_SCANS.pop(s_id, None)
+
+    thread = threading.Thread(target=worker_thread, args=(scan_id, handle, max_posts), daemon=True)
+    thread.start()
+
+    return jsonify({
+        "status": "running",
+        "scan_id": scan_id,
+        "handle": handle
+    })
+
+@app.route("/api/scan/<scan_id>")
+def api_get_scan(scan_id):
+    """Retrieve scan status, progress, and full result payload from VPS SQLite database."""
+    rec = get_scan_record(scan_id)
+    if not rec:
+        return jsonify({"error": "Scan session not found"}), 404
+
+    if scan_id in ACTIVE_SCANS:
+        rec["percent"] = ACTIVE_SCANS[scan_id].get("percent", rec.get("percent", 5))
+        rec["details"] = ACTIVE_SCANS[scan_id].get("details", rec.get("details", ""))
+        rec["posts_count"] = ACTIVE_SCANS[scan_id].get("posts_count", rec.get("posts_count", 0))
+        rec["domains_count"] = ACTIVE_SCANS[scan_id].get("domains_count", rec.get("domains_count", 0))
+        rec["status"] = "running"
+
+    return jsonify(rec)
+
+@app.route("/api/scan/<scan_id>/stop", methods=["POST"])
+def api_stop_scan_id(scan_id):
+    """Signal a running background scrape on the VPS to gracefully stop and save captured posts."""
+    if scan_id in ACTIVE_SCANS:
+        ACTIVE_SCANS[scan_id]["stop"] = True
+        print(f"[API] Stop request received for scan_id: {scan_id}")
+        return jsonify({"status": "stopping", "scan_id": scan_id})
+    return jsonify({"status": "not_running_or_already_stopped", "scan_id": scan_id})
+
+@app.route("/api/scan/<scan_id>", methods=["DELETE"])
+def api_delete_scan(scan_id):
+    """Delete a scan session from the VPS SQLite database."""
+    if scan_id in ACTIVE_SCANS:
+        ACTIVE_SCANS[scan_id]["stop"] = True
+        ACTIVE_SCANS.pop(scan_id, None)
+    delete_scan_record(scan_id)
+    return jsonify({"status": "deleted", "scan_id": scan_id})
+
+@app.route("/api/scans/clear", methods=["POST"])
+def api_clear_scans():
+    """Clear all scans from the VPS database."""
+    for s_id in list(ACTIVE_SCANS.keys()):
+        ACTIVE_SCANS[s_id]["stop"] = True
+    ACTIVE_SCANS.clear()
+    clear_all_scans()
+    return jsonify({"status": "cleared"})
+
+# Backward compatibility routes
+@app.route("/api/scrape", methods=["POST"])
+def api_scrape():
+    """Legacy synchronous endpoint."""
+    data = request.get_json() or {}
+    handle = (data.get("handle") or "").strip().lstrip("@")
+    if not handle:
+        return jsonify({"error": "Handle is required"}), 400
+    scan_id = data.get("scan_id") or f"scan_{int(datetime.utcnow().timestamp()*1000)}"
+    max_posts = int(data.get("max_posts", 1000))
+    create_scan_record(scan_id, handle)
     try:
         scraped_data = asyncio.run(scrape_full_account(handle, scan_id=scan_id, max_posts_cap=max_posts))
         return jsonify(scraped_data)
     except Exception as e:
         import traceback
         traceback.print_exc()
+        fail_scan_record(scan_id, str(e))
         return jsonify({"error": str(e)}), 500
-    finally:
-        ACTIVE_SCANS.pop(scan_id, None)
 
 @app.route("/api/progress")
 def api_progress():
     scan_id = request.args.get("scan_id")
     if scan_id and scan_id in ACTIVE_SCANS:
         return jsonify(ACTIVE_SCANS[scan_id])
+    if scan_id:
+        rec = get_scan_record(scan_id)
+        if rec:
+            return jsonify({
+                "percent": rec.get("percent", 100),
+                "details": rec.get("details", "Completed"),
+                "posts_count": rec.get("posts_count", 0),
+                "domains_count": rec.get("domains_count", 0),
+                "status": rec.get("status", "completed")
+            })
     return jsonify({"percent": 100, "details": "Completed or idle", "posts_count": 0, "domains_count": 0})
 
 @app.route("/api/stop", methods=["POST"])
@@ -386,7 +653,6 @@ def api_stop():
     scan_id = data.get("scan_id")
     if scan_id and scan_id in ACTIVE_SCANS:
         ACTIVE_SCANS[scan_id]["stop"] = True
-        print(f"[API] Stop request received for scan_id: {scan_id}")
         return jsonify({"status": "stopping", "scan_id": scan_id})
     return jsonify({"status": "not_running_or_already_stopped", "scan_id": scan_id})
 

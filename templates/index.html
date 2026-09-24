@@ -312,30 +312,86 @@
     let currentScanId = null;
     let isScanning = false;
     let progressPollTimer = null;
+    let savedScansList = [];
 
-    // Load history on startup
-    window.addEventListener('DOMContentLoaded', () => {
-      updateHistoryDrawerBadge();
+    // On startup: load scans from VPS SQLite DB and reconnect if any scan is running
+    window.addEventListener('DOMContentLoaded', async () => {
+      await fetchSavedScans();
+      // Periodically refresh drawer list so background progress updates
+      setInterval(fetchSavedScans, 4000);
+
+      // Check if there is an active running scan to reconnect to
+      const runningScan = savedScansList.find(s => s.status === 'running');
+      if (runningScan) {
+        attachToActiveScan(runningScan);
+      }
     });
 
     function setHandle(h) {
       document.getElementById('handleInput').value = h.replace(/^@+/, '');
     }
 
+    async function fetchSavedScans() {
+      try {
+        const res = await fetch('/api/scans');
+        if (!res.ok) return;
+        savedScansList = await res.json();
+        document.getElementById('historyCountBadge').innerText = savedScansList.length;
+        renderDrawerList();
+      } catch (e) {
+        console.error("Failed to load saved scans:", e);
+      }
+    }
+
+    function attachToActiveScan(scan) {
+      currentScanId = scan.id;
+      isScanning = true;
+      document.getElementById('handleInput').value = (scan.handle || '').replace(/^@+/, '');
+      document.getElementById('scrapeBtn').classList.add('hidden');
+      document.getElementById('stopBtn').classList.remove('hidden');
+      document.getElementById('stopBtn').disabled = false;
+      document.getElementById('statusBox').classList.remove('hidden');
+      document.getElementById('statusMessage').innerText = `Headless browser scanning @${scan.handle}`;
+      updateProgressUI(scan.percent || 5, scan.details || 'Scanning timeline in background on VPS...', scan.posts_count, scan.domains_count);
+      startProgressPolling(scan.id);
+    }
+
     function startProgressPolling(scanId) {
       if (progressPollTimer) clearInterval(progressPollTimer);
       progressPollTimer = setInterval(async () => {
         try {
-          const res = await fetch(`/api/progress?scan_id=${encodeURIComponent(scanId)}`);
+          const res = await fetch(`/api/scan/${encodeURIComponent(scanId)}`);
           if (!res.ok) return;
           const data = await res.json();
-          if (data && data.percent !== undefined) {
+          if (!data) return;
+
+          if (data.status === 'running') {
             updateProgressUI(data.percent, data.details, data.posts_count, data.domains_count);
+          } else if (data.status === 'completed' || data.status === 'stopped') {
+            stopProgressPolling();
+            isScanning = false;
+            document.getElementById('scrapeBtn').classList.remove('hidden');
+            document.getElementById('stopBtn').classList.add('hidden');
+            document.getElementById('statusBox').classList.add('hidden');
+
+            if (data.data) {
+              globalData = data.data;
+              renderDashboard(data.data);
+            }
+            fetchSavedScans();
+          } else if (data.status === 'failed') {
+            stopProgressPolling();
+            isScanning = false;
+            document.getElementById('scrapeBtn').classList.remove('hidden');
+            document.getElementById('stopBtn').classList.add('hidden');
+            document.getElementById('statusBox').classList.add('hidden');
+            alert("Scan stopped with notice: " + (data.error || data.details || "Unknown error"));
+            fetchSavedScans();
           }
         } catch (e) {
           // ignore transient poll errors
         }
-      }, 400);
+      }, 500);
     }
 
     function stopProgressPolling() {
@@ -351,11 +407,11 @@
       const pDetails = document.getElementById('progressDetailsText');
       const pCounts = document.getElementById('progressCountsText');
 
-      if (pBar) pBar.style.width = Math.max(5, Math.min(100, pct)) + '%';
-      if (pBadge) pBadge.innerText = Math.round(pct) + '%';
+      if (pBar) pBar.style.width = Math.max(5, Math.min(100, pct || 0)) + '%';
+      if (pBadge) pBadge.innerText = Math.round(pct || 0) + '%';
       if (pDetails && details) pDetails.innerHTML = details;
       if (pCounts && posts !== undefined) {
-        pCounts.innerText = `${posts} posts captured${domains !== undefined ? ` &bull; ${domains} doms` : ''}`;
+        pCounts.innerText = `${posts} posts captured${domains !== undefined ? ` • ${domains} doms` : ''}`;
       }
     }
 
@@ -366,39 +422,32 @@
       handle = handle.replace(/^@+/, '');
       document.getElementById('handleInput').value = handle;
 
-      currentScanId = 'scan_' + Date.now();
-      isScanning = true;
-
-      // Update UI for scanning
+      // Update UI for scanning immediately
       document.getElementById('scrapeBtn').classList.add('hidden');
       document.getElementById('stopBtn').classList.remove('hidden');
       document.getElementById('stopBtn').disabled = false;
       document.getElementById('statusBox').classList.remove('hidden');
       document.getElementById('statusMessage').innerText = `Headless browser scanning @${handle}`;
-      updateProgressUI(5, 'Initializing headless Chromium with authenticated session...', 0, 0);
-
-      startProgressPolling(currentScanId);
+      updateProgressUI(5, 'Launching background scrape on VPS...', 0, 0);
 
       try {
-        const res = await fetch('/api/scrape', {
+        const res = await fetch('/api/scan/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ handle, scan_id: currentScanId })
+          body: JSON.stringify({ handle })
         });
 
         const data = await res.json();
         if (!res.ok) {
-          throw new Error(data.error || "Failed to scan account");
+          throw new Error(data.error || "Failed to start scan");
         }
 
-        updateProgressUI(100, `Completed! Captured ${data.total_posts} posts.`, data.total_posts, data.unique_domains_count);
-        globalData = data;
-        saveScanToHistory(data);
-        renderDashboard(data);
+        currentScanId = data.scan_id;
+        isScanning = true;
+        startProgressPolling(currentScanId);
+        fetchSavedScans();
       } catch (err) {
         alert("Scan notice: " + err.message);
-      } finally {
-        stopProgressPolling();
         isScanning = false;
         document.getElementById('scrapeBtn').classList.remove('hidden');
         document.getElementById('stopBtn').classList.add('hidden');
@@ -408,15 +457,14 @@
 
     async function forceStopScan() {
       if (!currentScanId) return;
-      document.getElementById('statusMessage').innerText = "Stopping scan & compiling posts...";
+      document.getElementById('statusMessage').innerText = "Stopping scan & compiling posts on VPS...";
       document.getElementById('stopBtn').disabled = true;
       updateProgressUI(96, 'Force stop triggered. Finalizing captured posts & extracting domains...', undefined, undefined);
 
       try {
-        await fetch('/api/stop', {
+        await fetch(`/api/scan/${encodeURIComponent(currentScanId)}/stop`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scan_id: currentScanId })
+          headers: { 'Content-Type': 'application/json' }
         });
       } catch (e) {
         console.error("Stop error:", e);
@@ -424,6 +472,9 @@
     }
 
     function resetToNewScan() {
+      stopProgressPolling();
+      isScanning = false;
+      currentScanId = null;
       globalData = null;
       selectedDomainFilter = null;
       document.getElementById('handleInput').value = '';
@@ -431,6 +482,8 @@
       document.getElementById('resultsSection').classList.add('hidden');
       document.getElementById('emptyPlaceholder').classList.remove('hidden');
       document.getElementById('statusBox').classList.add('hidden');
+      document.getElementById('scrapeBtn').classList.remove('hidden');
+      document.getElementById('stopBtn').classList.add('hidden');
       document.getElementById('newScanHeaderBtn').classList.add('hidden');
     }
 
@@ -597,44 +650,7 @@
       });
     }
 
-    // --- DRAWER & LOCAL STORAGE HISTORY ---
-
-    function getHistory() {
-      try {
-        return JSON.parse(localStorage.getItem('x_scans_history') || '[]');
-      } catch {
-        return [];
-      }
-    }
-
-    function saveScanToHistory(data) {
-      if (!data || !data.handle) return;
-      const cleanHandle = (data.handle || '').replace(/^@+/, '');
-      data.handle = cleanHandle;
-      let history = getHistory();
-      // Remove any existing entry for this handle so latest is on top
-      history = history.filter(h => h.handle.toLowerCase() !== cleanHandle.toLowerCase());
-      history.unshift({
-        id: 'scan_' + Date.now(),
-        handle: cleanHandle,
-        name: data.profile.name || cleanHandle,
-        avatar: data.profile.avatar || '',
-        total_posts: data.total_posts,
-        unique_domains_count: data.unique_domains_count,
-        savedAt: new Date().toISOString(),
-        data: data
-      });
-      // Keep up to 25 accounts
-      if (history.length > 25) history = history.slice(0, 25);
-      localStorage.setItem('x_scans_history', JSON.stringify(history));
-      updateHistoryDrawerBadge();
-    }
-
-    function updateHistoryDrawerBadge() {
-      const history = getHistory();
-      document.getElementById('historyCountBadge').innerText = history.length;
-      renderDrawerList();
-    }
+    // --- DRAWER & VPS CENTRAL DATABASE HISTORY ---
 
     function toggleHistoryDrawer() {
       const drawer = document.getElementById('historyDrawer');
@@ -645,7 +661,7 @@
         drawer.classList.add('translate-x-full');
         backdrop.classList.add('hidden');
       } else {
-        renderDrawerList();
+        fetchSavedScans();
         drawer.classList.remove('translate-x-full');
         backdrop.classList.remove('hidden');
       }
@@ -653,21 +669,21 @@
 
     function renderDrawerList() {
       const container = document.getElementById('drawerList');
-      const history = getHistory();
       container.innerHTML = '';
 
-      if (history.length === 0) {
+      if (savedScansList.length === 0) {
         container.innerHTML = `
           <div class="text-center py-12 text-[#71767B] text-xs">
-            <p>No saved scans yet.</p>
-            <p class="text-[11px] mt-1">When you scan an account, it will automatically be saved here.</p>
+            <p>No saved scans on VPS database yet.</p>
+            <p class="text-[11px] mt-1">When you search any account, it starts an autonomous background scan on the VPS that stays saved across all devices.</p>
           </div>
         `;
         return;
       }
 
-      history.forEach(item => {
-        const isCurrent = globalData && globalData.handle && globalData.handle.toLowerCase() === item.handle.toLowerCase();
+      savedScansList.forEach(item => {
+        const isCurrent = (currentScanId && currentScanId === item.id) || 
+                          (globalData && globalData.handle && globalData.handle.toLowerCase() === item.handle.toLowerCase());
         const card = document.createElement('div');
         card.className = `p-3 rounded-xl border transition-colors flex items-center justify-between gap-3 cursor-pointer ${
           isCurrent 
@@ -675,15 +691,32 @@
             : 'bg-[#000000] border-[#2F3336] hover:border-[#71767B]'
         }`;
 
+        let statusPill = '';
+        if (item.status === 'running') {
+          statusPill = `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#1D9BF0]/15 text-[#1D9BF0] border border-[#1D9BF0]/30"><span class="w-1.5 h-1.5 rounded-full bg-[#1D9BF0] animate-ping"></span>${item.percent || 0}%</span>`;
+        } else if (item.status === 'stopped') {
+          statusPill = `<span class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/30">${item.posts_count} posts (stopped)</span>`;
+        } else if (item.status === 'failed') {
+          statusPill = `<span class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-medium bg-rose-500/15 text-rose-400 border border-rose-500/30">Failed</span>`;
+        } else {
+          statusPill = `<span class="inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">✓ ${item.posts_count} posts • ${item.domains_count} doms</span>`;
+        }
+
+        const relativeTime = formatRelativeTime(item.created_at);
+
         card.innerHTML = `
-          <div onclick="loadSavedScan('${item.handle}')" class="flex items-center gap-2.5 min-w-0 flex-1">
-            <img src="${item.avatar || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png'}" class="w-8 h-8 rounded-full border border-[#2F3336] object-cover bg-neutral-900" />
-            <div class="min-w-0">
-              <h4 class="text-xs font-bold text-[#F7F9F9] truncate">${escapeHtml(item.name)}</h4>
-              <p class="text-[11px] text-[#71767B] truncate">@${escapeHtml(item.handle.replace(/^@+/, ''))} &bull; ${item.total_posts} posts &bull; ${item.unique_domains_count} doms</p>
+          <div onclick="loadScanSession('${item.id}')" class="flex items-center gap-2.5 min-w-0 flex-1">
+            <img src="${item.profile_avatar || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png'}" class="w-8 h-8 rounded-full border border-[#2F3336] object-cover bg-neutral-900 shrink-0" />
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center justify-between gap-1">
+                <h4 class="text-xs font-bold text-[#F7F9F9] truncate">${escapeHtml(item.profile_name || item.handle)}</h4>
+                <span class="text-[10px] text-[#71767B] shrink-0">${relativeTime}</span>
+              </div>
+              <p class="text-[11px] text-[#71767B] truncate mb-1">@${escapeHtml(item.handle.replace(/^@+/, ''))}</p>
+              <div>${statusPill}</div>
             </div>
           </div>
-          <button onclick="deleteSavedScan('${item.handle}', event)" title="Delete from history" class="text-[#71767B] hover:text-rose-400 p-1 text-xs">
+          <button onclick="deleteScanSession('${item.id}', event)" title="Delete from VPS database" class="text-[#71767B] hover:text-rose-400 p-1 text-sm font-bold ml-1 shrink-0">
             &times;
           </button>
         `;
@@ -691,34 +724,75 @@
       });
     }
 
-    function loadSavedScan(handle) {
-      const history = getHistory();
-      const match = history.find(h => h.handle.toLowerCase() === handle.toLowerCase());
-      if (match && match.data) {
-        globalData = match.data;
-        document.getElementById('handleInput').value = match.handle;
-        renderDashboard(match.data);
-        toggleHistoryDrawer();
+    async function loadScanSession(scanId) {
+      try {
+        const res = await fetch(`/api/scan/${encodeURIComponent(scanId)}`);
+        if (!res.ok) return;
+        const scan = await res.json();
+        
+        if (scan.status === 'running') {
+          attachToActiveScan(scan);
+          toggleHistoryDrawer();
+        } else if (scan.data) {
+          stopProgressPolling();
+          isScanning = false;
+          currentScanId = scan.id;
+          globalData = scan.data;
+          document.getElementById('handleInput').value = (scan.handle || '').replace(/^@+/, '');
+          document.getElementById('statusBox').classList.add('hidden');
+          document.getElementById('scrapeBtn').classList.remove('hidden');
+          document.getElementById('stopBtn').classList.add('hidden');
+          renderDashboard(scan.data);
+          toggleHistoryDrawer();
+        }
+      } catch (e) {
+        alert("Failed to load session: " + e.message);
       }
     }
 
-    function deleteSavedScan(handle, event) {
+    async function deleteScanSession(scanId, event) {
       event.stopPropagation();
-      let history = getHistory();
-      history = history.filter(h => h.handle.toLowerCase() !== handle.toLowerCase());
-      localStorage.setItem('x_scans_history', JSON.stringify(history));
-      updateHistoryDrawerBadge();
+      try {
+        await fetch(`/api/scan/${encodeURIComponent(scanId)}`, { method: 'DELETE' });
+        if (currentScanId === scanId) {
+          resetToNewScan();
+        }
+        await fetchSavedScans();
+      } catch (e) {
+        console.error("Failed to delete scan:", e);
+      }
     }
 
-    function clearAllCache() {
-      if (confirm("Clear all saved scans and reset the dashboard cache?")) {
-        localStorage.removeItem('x_scans_history');
-        updateHistoryDrawerBadge();
-        resetToNewScan();
-        const drawer = document.getElementById('historyDrawer');
-        if (!drawer.classList.contains('translate-x-full')) {
-          toggleHistoryDrawer();
+    async function clearAllCache() {
+      if (confirm("Clear all saved scans from the VPS database?")) {
+        try {
+          await fetch('/api/scans/clear', { method: 'POST' });
+          await fetchSavedScans();
+          resetToNewScan();
+          const drawer = document.getElementById('historyDrawer');
+          if (!drawer.classList.contains('translate-x-full')) {
+            toggleHistoryDrawer();
+          }
+        } catch (e) {
+          console.error("Failed to clear scans:", e);
         }
+      }
+    }
+
+    function formatRelativeTime(isoStr) {
+      if (!isoStr) return '';
+      try {
+        const d = new Date(isoStr);
+        const now = new Date();
+        const diffSec = Math.floor((now - d) / 1000);
+        if (diffSec < 60) return 'Just now';
+        const diffMin = Math.floor(diffSec / 60);
+        if (diffMin < 60) return `${diffMin}m ago`;
+        const diffHr = Math.floor(diffMin / 60);
+        if (diffHr < 24) return `${diffHr}h ago`;
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      } catch {
+        return '';
       }
     }
 
