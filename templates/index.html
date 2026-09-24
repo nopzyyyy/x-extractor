@@ -669,8 +669,8 @@
               <span class="text-xs text-[#71767B]">&middot;</span>
               <span class="text-xs text-[#71767B]">${formatDate(p.created_at)}</span>
             </div>
-            ${p.post_url ? `
-              <a href="${p.post_url}" target="_blank" rel="noopener noreferrer" class="text-xs text-[#1D9BF0] hover:underline flex items-center gap-1 font-medium">
+            ${p.post_url && p.post_url.startsWith('http') ? `
+              <a href="${escapeHtml(p.post_url)}" target="_blank" rel="noopener noreferrer" class="text-xs text-[#1D9BF0] hover:underline flex items-center gap-1 font-medium">
                 Post Link &nearr;
               </a>
             ` : ''}
