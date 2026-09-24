@@ -196,7 +196,7 @@ async def scrape_account_posts(handle, max_scrolls=8, mode="timeline"):
             const bioEl = document.querySelector('[data-testid="UserDescription"]');
             const bodyText = document.body ? document.body.innerText : '';
             return {
-                name: nameEl ? nameEl.innerText.split('\n')[0] : '',
+                name: nameEl ? nameEl.innerText.split(/\r?\n/)[0] : '',
                 headerText: headerItems ? headerItems.innerText : '',
                 avatar: avatarEl ? avatarEl.getAttribute('src') : '',
                 bio: bioEl ? bioEl.innerText : '',
