@@ -136,14 +136,28 @@
         </div>
       </form>
 
-      <!-- Live Status Indicator -->
-      <div id="statusBox" class="hidden mt-4 pt-4 border-t border-[#2F3336]/60">
-        <div class="flex items-center justify-between gap-3 flex-wrap">
-          <div class="flex items-center gap-2.5 text-xs text-[#1D9BF0]">
-            <div class="w-2 h-2 rounded-full bg-[#1D9BF0] animate-ping"></div>
-            <span id="statusMessage" class="font-medium">Launching headless Chromium and scrolling profile timeline...</span>
+      <!-- Live Status & Progress Indicator (Directly under the line) -->
+      <div id="statusBox" class="hidden mt-4 pt-4 border-t border-[#2F3336]/60 space-y-2.5">
+        <div class="flex items-center justify-between gap-3 text-xs">
+          <div class="flex items-center gap-2 text-[#1D9BF0] font-medium min-w-0">
+            <div class="w-2 h-2 rounded-full bg-[#1D9BF0] animate-ping shrink-0"></div>
+            <span id="statusMessage" class="truncate font-semibold">Headless browser scanning @...</span>
           </div>
-          <button onclick="forceStopScan()" class="text-xs text-rose-400 hover:underline font-medium">Click here to stop now and keep captured posts</button>
+          <div class="flex items-center gap-2 shrink-0">
+            <span id="progressPercentBadge" class="text-xs font-mono font-bold text-[#1D9BF0] bg-[#1D9BF0]/10 px-2 py-0.5 rounded border border-[#1D9BF0]/20">0%</span>
+            <button type="button" onclick="forceStopScan()" class="text-xs text-rose-400 hover:underline font-medium ml-1">Stop &amp; Keep Posts</button>
+          </div>
+        </div>
+
+        <!-- Animated Progress Bar Track -->
+        <div class="w-full bg-[#000000] border border-[#2F3336] h-2.5 rounded-full overflow-hidden p-0.5">
+          <div id="progressBar" class="bg-[#1D9BF0] h-full transition-all duration-300 rounded-full" style="width: 5%;"></div>
+        </div>
+
+        <!-- Real-time Activity Text Under Status Line -->
+        <div class="flex items-center justify-between text-[11px] text-[#71767B]">
+          <span id="progressDetailsText" class="truncate">Initializing headless Chromium with authenticated session...</span>
+          <span id="progressCountsText" class="font-mono text-zinc-400 shrink-0 ml-2">0 posts captured</span>
         </div>
       </div>
     </section>
@@ -297,6 +311,7 @@
     let sortAscending = false;
     let currentScanId = null;
     let isScanning = false;
+    let progressPollTimer = null;
 
     // Load history on startup
     window.addEventListener('DOMContentLoaded', () => {
@@ -304,13 +319,52 @@
     });
 
     function setHandle(h) {
-      document.getElementById('handleInput').value = h;
+      document.getElementById('handleInput').value = h.replace(/^@+/, '');
+    }
+
+    function startProgressPolling(scanId) {
+      if (progressPollTimer) clearInterval(progressPollTimer);
+      progressPollTimer = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/progress?scan_id=${encodeURIComponent(scanId)}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data && data.percent !== undefined) {
+            updateProgressUI(data.percent, data.details, data.posts_count, data.domains_count);
+          }
+        } catch (e) {
+          // ignore transient poll errors
+        }
+      }, 400);
+    }
+
+    function stopProgressPolling() {
+      if (progressPollTimer) {
+        clearInterval(progressPollTimer);
+        progressPollTimer = null;
+      }
+    }
+
+    function updateProgressUI(pct, details, posts, domains) {
+      const pBar = document.getElementById('progressBar');
+      const pBadge = document.getElementById('progressPercentBadge');
+      const pDetails = document.getElementById('progressDetailsText');
+      const pCounts = document.getElementById('progressCountsText');
+
+      if (pBar) pBar.style.width = Math.max(5, Math.min(100, pct)) + '%';
+      if (pBadge) pBadge.innerText = Math.round(pct) + '%';
+      if (pDetails && details) pDetails.innerHTML = details;
+      if (pCounts && posts !== undefined) {
+        pCounts.innerText = `${posts} posts captured${domains !== undefined ? ` &bull; ${domains} doms` : ''}`;
+      }
     }
 
     async function handleScrape(e) {
       e.preventDefault();
-      const handle = document.getElementById('handleInput').value.trim();
+      let handle = document.getElementById('handleInput').value.trim();
       if (!handle) return;
+      handle = handle.replace(/^@+/, '');
+      document.getElementById('handleInput').value = handle;
 
       currentScanId = 'scan_' + Date.now();
       isScanning = true;
@@ -318,8 +372,12 @@
       // Update UI for scanning
       document.getElementById('scrapeBtn').classList.add('hidden');
       document.getElementById('stopBtn').classList.remove('hidden');
+      document.getElementById('stopBtn').disabled = false;
       document.getElementById('statusBox').classList.remove('hidden');
-      document.getElementById('statusMessage').innerText = `Headless browser scanning @${handle}... Scrolling timeline to scrape all posts`;
+      document.getElementById('statusMessage').innerText = `Headless browser scanning @${handle}`;
+      updateProgressUI(5, 'Initializing headless Chromium with authenticated session...', 0, 0);
+
+      startProgressPolling(currentScanId);
 
       try {
         const res = await fetch('/api/scrape', {
@@ -333,12 +391,14 @@
           throw new Error(data.error || "Failed to scan account");
         }
 
+        updateProgressUI(100, `Completed! Captured ${data.total_posts} posts.`, data.total_posts, data.unique_domains_count);
         globalData = data;
         saveScanToHistory(data);
         renderDashboard(data);
       } catch (err) {
         alert("Scan notice: " + err.message);
       } finally {
+        stopProgressPolling();
         isScanning = false;
         document.getElementById('scrapeBtn').classList.remove('hidden');
         document.getElementById('stopBtn').classList.add('hidden');
@@ -348,8 +408,9 @@
 
     async function forceStopScan() {
       if (!currentScanId) return;
-      document.getElementById('statusMessage').innerText = "Stopping scan & compiling all posts scraped so far...";
+      document.getElementById('statusMessage').innerText = "Stopping scan & compiling posts...";
       document.getElementById('stopBtn').disabled = true;
+      updateProgressUI(96, 'Force stop triggered. Finalizing captured posts & extracting domains...', undefined, undefined);
 
       try {
         await fetch('/api/stop', {
@@ -378,9 +439,10 @@
       document.getElementById('resultsSection').classList.remove('hidden');
       document.getElementById('newScanHeaderBtn').classList.remove('hidden');
 
+      const cleanHandle = (data.handle || '').replace(/^@+/, '');
       document.getElementById('profileAvatar').src = data.profile.avatar || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png';
-      document.getElementById('profileName').innerText = data.profile.name || data.handle;
-      document.getElementById('profileHandle').innerText = '@' + data.handle;
+      document.getElementById('profileName').innerText = data.profile.name || cleanHandle;
+      document.getElementById('profileHandle').innerText = '@' + cleanHandle;
       document.getElementById('profileJoined').innerText = `Joined: ${data.joined || 'Active'}`;
 
       document.getElementById('kpiPosts').innerText = data.total_posts;
@@ -504,11 +566,12 @@
           </span>
         `).join('');
 
+        const cleanHandle = (globalData.handle || '').replace(/^@+/, '');
         card.innerHTML = `
           <div class="flex items-start justify-between gap-3 mb-2">
             <div class="flex items-center gap-2">
-              <span class="font-bold text-sm text-[#F7F9F9]">${globalData.profile.name || globalData.handle}</span>
-              <span class="text-xs text-[#71767B]">@${globalData.handle}</span>
+              <span class="font-bold text-sm text-[#F7F9F9]">${escapeHtml(globalData.profile.name || cleanHandle)}</span>
+              <span class="text-xs text-[#71767B]">@${escapeHtml(cleanHandle)}</span>
               <span class="text-xs text-[#71767B]">&middot;</span>
               <span class="text-xs text-[#71767B]">${formatDate(p.created_at)}</span>
             </div>
@@ -546,13 +609,15 @@
 
     function saveScanToHistory(data) {
       if (!data || !data.handle) return;
+      const cleanHandle = (data.handle || '').replace(/^@+/, '');
+      data.handle = cleanHandle;
       let history = getHistory();
       // Remove any existing entry for this handle so latest is on top
-      history = history.filter(h => h.handle.toLowerCase() !== data.handle.toLowerCase());
+      history = history.filter(h => h.handle.toLowerCase() !== cleanHandle.toLowerCase());
       history.unshift({
         id: 'scan_' + Date.now(),
-        handle: data.handle,
-        name: data.profile.name || data.handle,
+        handle: cleanHandle,
+        name: data.profile.name || cleanHandle,
         avatar: data.profile.avatar || '',
         total_posts: data.total_posts,
         unique_domains_count: data.unique_domains_count,
@@ -615,7 +680,7 @@
             <img src="${item.avatar || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png'}" class="w-8 h-8 rounded-full border border-[#2F3336] object-cover bg-neutral-900" />
             <div class="min-w-0">
               <h4 class="text-xs font-bold text-[#F7F9F9] truncate">${escapeHtml(item.name)}</h4>
-              <p class="text-[11px] text-[#71767B] truncate">@${escapeHtml(item.handle)} &bull; ${item.total_posts} posts &bull; ${item.unique_domains_count} doms</p>
+              <p class="text-[11px] text-[#71767B] truncate">@${escapeHtml(item.handle.replace(/^@+/, ''))} &bull; ${item.total_posts} posts &bull; ${item.unique_domains_count} doms</p>
             </div>
           </div>
           <button onclick="deleteSavedScan('${item.handle}', event)" title="Delete from history" class="text-[#71767B] hover:text-rose-400 p-1 text-xs">
