@@ -467,7 +467,7 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=1000):
 
             # Compute progress percentage smoothly up to 92%
             progress_pct = min(92, 30 + int(scroll_round * 3.5))
-            detail_msg = f"Scrolling timeline &bull; Round {scroll_round} &bull; Captured {len(posts_list)} posts &bull; {len(domain_counts)} unique domains"
+            detail_msg = f"Scrolling timeline • Round {scroll_round} • Captured {len(posts_list)} posts • {len(domain_counts)} unique domains"
             update_scan_progress(scan_id, progress_pct, detail_msg, len(posts_list), len(domain_counts))
 
             # Scroll down and wait for render
