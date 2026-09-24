@@ -14,6 +14,9 @@ app = Flask(__name__)
 DEFAULT_AUTH_TOKEN = "2f35b33c411690dae748d149822b216bfe58bafd"
 AUTH_TOKEN = os.environ.get("X_AUTH_TOKEN", DEFAULT_AUTH_TOKEN)
 
+# Active scan tracker for immediate force stop
+ACTIVE_SCANS = {}
+
 MONTH_MAP = {
     "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
     "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12
@@ -120,10 +123,10 @@ def extract_domains_and_urls(text, anchor_items):
 
     return sorted(list(domains)), sorted(list(set(urls)))
 
-async def scrape_full_account(handle, max_posts_cap=500):
+async def scrape_full_account(handle, scan_id=None, max_posts_cap=1000):
     """
     Deploys headless browser to x.com/{handle} and loops continuously scrolling down 
-    until the bottom of the account is reached (or safety cap), collecting ALL posts and domains.
+    until the bottom of the account is reached or force stop is triggered.
     """
     handle = handle.lstrip("@").strip()
     if "/" in handle:
@@ -134,6 +137,7 @@ async def scrape_full_account(handle, max_posts_cap=500):
         raise RuntimeError("No supported Chrome or Chromium executable found on the system.")
 
     result = {
+        "scan_id": scan_id or "",
         "handle": handle,
         "profile": {
             "name": handle,
@@ -142,6 +146,7 @@ async def scrape_full_account(handle, max_posts_cap=500):
             "bio": ""
         },
         "joined": "",
+        "stopped_early": False,
         "total_posts": 0,
         "unique_domains_count": 0,
         "domains": [],
@@ -177,9 +182,8 @@ async def scrape_full_account(handle, max_posts_cap=500):
 
         page = await context.new_page()
 
-        # Navigate directly to user profile
         target_url = f"https://x.com/{handle}"
-        print(f"[Scraper] Navigating to account: {target_url}")
+        print(f"[Scraper] Navigating to account: {target_url} (scan_id: {scan_id})")
 
         await page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
         try:
@@ -216,17 +220,23 @@ async def scrape_full_account(handle, max_posts_cap=500):
         else:
             result["joined"] = "Active"
 
-        # Continuous scroll loop: scroll down until the end of the timeline is reached
+        # Continuous scroll loop with Force Stop check
         seen_status_urls = set()
         posts_list = []
         domain_counts = {}
         empty_rounds = 0
         scroll_round = 0
-        max_scroll_attempts = 150  # generous safety cap for automated scrolling
+        max_scroll_attempts = 200
 
-        print(f"[Scraper] Starting full account scan for @{handle}...")
+        print(f"[Scraper] Continuous scan running for @{handle}...")
 
         while empty_rounds < 4 and len(posts_list) < max_posts_cap and scroll_round < max_scroll_attempts:
+            # Check if user requested force stop
+            if scan_id and ACTIVE_SCANS.get(scan_id, {}).get("stop"):
+                print(f"[Scraper] Force stop triggered for {scan_id}. Preserving {len(posts_list)} posts.")
+                result["stopped_early"] = True
+                break
+
             scroll_round += 1
             extracted = await page.evaluate('''() => {
                 const articles = document.querySelectorAll('article');
@@ -285,14 +295,12 @@ async def scrape_full_account(handle, max_posts_cap=500):
             else:
                 empty_rounds = 0
 
-            print(f"[Scan Progress] Round {scroll_round}: +{new_in_batch} new posts | Total: {len(posts_list)}")
-
-            # Scroll down
+            # Scroll down and brief pause for next tweets
             await page.evaluate("window.scrollBy(0, 3200)")
-            await asyncio.sleep(1.4)
+            await asyncio.sleep(1.3)
 
         await browser.close()
-        print(f"[Scraper] Scan finished for @{handle}. Total unique posts: {len(posts_list)}")
+        print(f"[Scraper] Scan ended for @{handle}. Total unique posts: {len(posts_list)}")
 
         domain_summary = []
         for dom, count in sorted(domain_counts.items(), key=lambda x: x[1], reverse=True):
@@ -320,16 +328,31 @@ def api_scrape():
     if not handle:
         return jsonify({"error": "Handle is required"}), 400
 
-    max_posts = int(data.get("max_posts", 500))
-    max_posts = max(10, min(max_posts, 2000))
+    scan_id = data.get("scan_id") or f"scan_{int(datetime.utcnow().timestamp()*1000)}"
+    ACTIVE_SCANS[scan_id] = {"stop": False}
+
+    max_posts = int(data.get("max_posts", 1000))
+    max_posts = max(10, min(max_posts, 5000))
 
     try:
-        scraped_data = asyncio.run(scrape_full_account(handle, max_posts_cap=max_posts))
+        scraped_data = asyncio.run(scrape_full_account(handle, scan_id=scan_id, max_posts_cap=max_posts))
         return jsonify(scraped_data)
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+    finally:
+        ACTIVE_SCANS.pop(scan_id, None)
+
+@app.route("/api/stop", methods=["POST"])
+def api_stop():
+    data = request.get_json() or {}
+    scan_id = data.get("scan_id")
+    if scan_id and scan_id in ACTIVE_SCANS:
+        ACTIVE_SCANS[scan_id]["stop"] = True
+        print(f"[API] Stop request received for scan_id: {scan_id}")
+        return jsonify({"status": "stopping", "scan_id": scan_id})
+    return jsonify({"status": "not_running_or_already_stopped", "scan_id": scan_id})
 
 @app.route("/api/health")
 def api_health():
@@ -339,6 +362,7 @@ def api_health():
         "browser_found": bool(browser),
         "browser_path": browser,
         "auth_token_set": bool(AUTH_TOKEN),
+        "active_scans_count": len(ACTIVE_SCANS),
         "timestamp": datetime.utcnow().isoformat() + "Z"
     })
 

@@ -28,9 +28,17 @@
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #71767B;
+      border-radius: 2px;
+    }
   </style>
 </head>
-<body class="bg-black text-[#F7F9F9] min-h-screen selection:bg-[#1D9BF0]/30 transition-colors">
+<body class="bg-black text-[#F7F9F9] min-h-screen selection:bg-[#1D9BF0]/30 transition-colors relative overflow-x-hidden">
   
   <div class="max-w-4xl mx-auto px-4 py-8">
     
@@ -42,17 +50,35 @@
         </div>
         <div>
           <h1 class="text-lg font-bold tracking-tight text-[#F7F9F9] flex items-center gap-2">
-            X Extractor <span class="text-xs px-2 py-0.5 rounded-full bg-[#1D9BF0]/15 text-[#1D9BF0] font-medium border border-[#1D9BF0]/30">Full Account Scanner</span>
+            X Extractor <span class="text-xs px-2 py-0.5 rounded-full bg-[#1D9BF0]/15 text-[#1D9BF0] font-medium border border-[#1D9BF0]/30">Full Scanner</span>
           </h1>
           <p class="text-xs text-[#71767B]">
-            Autonomous headless Chromium scraper &mdash; navigates directly to the profile and continuously scrolls until the entire account is scraped
+            Automated timeline scraper &bull; Extracts every post &bull; Filters external domains
           </p>
         </div>
       </div>
       
-      <div class="flex items-center gap-2">
-        <span class="text-xs text-[#71767B] hidden sm:inline-block">Auth: Permanent Active</span>
-        <div class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" title="X Auth Token Connected"></div>
+      <!-- Right Controls: Drawer Toggle & New Scan -->
+      <div class="flex items-center gap-2.5">
+        <button 
+          onclick="resetToNewScan()" 
+          id="newScanHeaderBtn"
+          class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-[#16181C] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors"
+          title="Clear current view and start a new scan"
+        >
+          <span>&#x2795; New Scan</span>
+        </button>
+
+        <button 
+          onclick="toggleHistoryDrawer()" 
+          class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs bg-[#16181C] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors"
+          title="Open saved scans drawer"
+        >
+          <span>&#x1F4C1; Saved Scans</span>
+          <span id="historyCountBadge" class="px-1.5 py-0.2 rounded-full bg-[#2F3336] text-[10px] font-bold text-[#1D9BF0]">0</span>
+        </button>
+
+        <div class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse ml-1" title="Permanent X Auth Active"></div>
       </div>
     </header>
 
@@ -72,6 +98,7 @@
             />
           </div>
           
+          <!-- Scan Trigger Button -->
           <button 
             type="submit" 
             id="scrapeBtn"
@@ -80,9 +107,19 @@
             <span id="btnSpinner" class="hidden animate-spin">&#x23F3;</span>
             <span id="btnText">&#x1F680; Scan Full Account</span>
           </button>
+
+          <!-- Force Stop Button (Visible only during active scan) -->
+          <button 
+            type="button" 
+            id="stopBtn"
+            onclick="forceStopScan()"
+            class="hidden px-5 py-3 bg-rose-600 hover:bg-rose-700 active:opacity-90 text-white text-sm font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <span>&#x23F9; Force Stop</span>
+          </button>
         </div>
 
-        <!-- Presets -->
+        <!-- Presets & Quick Reset -->
         <div class="flex items-center justify-between flex-wrap gap-3 pt-1 text-xs text-[#71767B]">
           <div class="flex items-center gap-1.5 flex-wrap">
             <span>Quick Presets:</span>
@@ -91,17 +128,22 @@
             <button type="button" onclick="setHandle('jack')" class="px-2.5 py-1 rounded-md bg-[#000000] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors">@jack</button>
           </div>
 
-          <div class="text-xs text-[#71767B]">
-            Automated continuous scroll &bull; Extracts every post &bull; Filters external domains
+          <div class="flex items-center gap-2">
+            <button type="button" onclick="resetToNewScan()" class="text-[#71767B] hover:text-[#E7E9EA] transition-colors">Reset View</button>
+            <span>&bull;</span>
+            <button type="button" onclick="clearAllCache()" class="text-rose-400/80 hover:text-rose-400 transition-colors">Clear Cache</button>
           </div>
         </div>
       </form>
 
-      <!-- Status Indicator -->
+      <!-- Live Status Indicator -->
       <div id="statusBox" class="hidden mt-4 pt-4 border-t border-[#2F3336]/60">
-        <div class="flex items-center gap-2.5 text-xs text-[#1D9BF0]">
-          <div class="w-2 h-2 rounded-full bg-[#1D9BF0] animate-ping"></div>
-          <span id="statusMessage" class="font-medium">Launching headless Chromium and scrolling profile timeline...</span>
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <div class="flex items-center gap-2.5 text-xs text-[#1D9BF0]">
+            <div class="w-2 h-2 rounded-full bg-[#1D9BF0] animate-ping"></div>
+            <span id="statusMessage" class="font-medium">Launching headless Chromium and scrolling profile timeline...</span>
+          </div>
+          <button onclick="forceStopScan()" class="text-xs text-rose-400 hover:underline font-medium">Click here to stop now and keep captured posts</button>
         </div>
       </div>
     </section>
@@ -125,7 +167,7 @@
         <div class="p-4 rounded-xl bg-[#16181C] border border-[#2F3336]">
           <span class="text-xs text-[#71767B] block">Total Posts</span>
           <span id="kpiPosts" class="text-xl font-bold text-[#F7F9F9] mt-1 block">0</span>
-          <span class="text-[11px] text-emerald-400 font-medium">Scraped from account</span>
+          <span id="kpiStatusBadge" class="text-[11px] text-emerald-400 font-medium">Full account scanned</span>
         </div>
 
         <!-- Unique Domains -->
@@ -135,7 +177,7 @@
           <span class="text-[11px] text-[#71767B]">Filtered root domains</span>
         </div>
 
-        <!-- Timeline Range -->
+        <!-- Latest Post -->
         <div class="p-4 rounded-xl bg-[#16181C] border border-[#2F3336]">
           <span class="text-xs text-[#71767B] block">Latest Post</span>
           <span id="kpiLatest" class="text-sm font-bold text-[#F7F9F9] mt-1.5 block truncate">&mdash;</span>
@@ -175,7 +217,7 @@
             id="feedFilterInput" 
             oninput="applyFilters()" 
             placeholder="Search within posts..." 
-            class="px-3 py-1.5 text-xs bg-[#16181C] border border-[#2F3336] rounded-lg text-[#F7F9F9] placeholder:text-[#71767B] focus:outline-none focus:border-[#1D9BF0] transition-colors w-48"
+            class="px-3 py-1.5 text-xs bg-[#16181C] border border-[#2F3336] rounded-lg text-[#F7F9F9] placeholder:text-[#71767B] focus:outline-none focus:border-[#1D9BF0] transition-colors w-44"
           />
           <button 
             onclick="toggleSortOrder()" 
@@ -189,6 +231,12 @@
             class="px-3 py-1.5 text-xs rounded-lg bg-[#16181C] border border-[#2F3336] text-[#E7E9EA] hover:border-[#1D9BF0] transition-colors"
           >
             Export CSV
+          </button>
+          <button 
+            onclick="resetToNewScan()" 
+            class="px-3 py-1.5 text-xs rounded-lg bg-[#1D9BF0]/15 border border-[#1D9BF0]/30 text-[#1D9BF0] hover:bg-[#1D9BF0]/25 transition-colors font-medium"
+          >
+            + Start New
           </button>
         </div>
       </div>
@@ -213,10 +261,47 @@
 
   </div>
 
+  <!-- SAVED SCANS DRAWER (Slide-over) -->
+  <div id="drawerBackdrop" onclick="toggleHistoryDrawer()" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40 transition-opacity"></div>
+  <aside id="historyDrawer" class="fixed top-0 right-0 h-full w-80 sm:w-96 bg-[#16181C] border-l border-[#2F3336] z-50 transform translate-x-full transition-transform duration-300 flex flex-col">
+    <!-- Drawer Header -->
+    <div class="p-5 border-b border-[#2F3336] flex items-center justify-between">
+      <div>
+        <h2 class="text-sm font-bold text-[#F7F9F9] flex items-center gap-2">
+          <span>&#x1F4C1; Saved Account Scans</span>
+        </h2>
+        <p class="text-[11px] text-[#71767B] mt-0.5">Jump between previously scanned results</p>
+      </div>
+      <button onclick="toggleHistoryDrawer()" class="text-[#71767B] hover:text-white text-lg p-1">&times;</button>
+    </div>
+
+    <!-- Drawer Actions -->
+    <div class="p-3 border-b border-[#2F3336]/60 bg-[#000000]/30 flex items-center justify-between gap-2">
+      <button onclick="resetToNewScan(); toggleHistoryDrawer();" class="text-xs px-3 py-1.5 rounded-lg bg-[#1D9BF0] text-white hover:bg-[#1A8CD8] transition-colors font-medium flex-1">
+        + Start New Scan
+      </button>
+      <button onclick="clearAllCache()" class="text-xs px-2.5 py-1.5 rounded-lg bg-[#2F3336]/40 text-rose-400 hover:bg-rose-950/40 border border-rose-900/30 transition-colors">
+        Clear All
+      </button>
+    </div>
+
+    <!-- Drawer List -->
+    <div id="drawerList" class="flex-1 overflow-y-auto p-4 space-y-2.5 custom-scrollbar">
+      <!-- Dynamically populated saved items -->
+    </div>
+  </aside>
+
   <script>
     let globalData = null;
     let selectedDomainFilter = null;
     let sortAscending = false;
+    let currentScanId = null;
+    let isScanning = false;
+
+    // Load history on startup
+    window.addEventListener('DOMContentLoaded', () => {
+      updateHistoryDrawerBadge();
+    });
 
     function setHandle(h) {
       document.getElementById('handleInput').value = h;
@@ -227,9 +312,12 @@
       const handle = document.getElementById('handleInput').value.trim();
       if (!handle) return;
 
-      document.getElementById('scrapeBtn').disabled = true;
-      document.getElementById('btnSpinner').classList.remove('hidden');
-      document.getElementById('btnText').innerText = "Scanning Account...";
+      currentScanId = 'scan_' + Date.now();
+      isScanning = true;
+
+      // Update UI for scanning
+      document.getElementById('scrapeBtn').classList.add('hidden');
+      document.getElementById('stopBtn').classList.remove('hidden');
       document.getElementById('statusBox').classList.remove('hidden');
       document.getElementById('statusMessage').innerText = `Headless browser scanning @${handle}... Scrolling timeline to scrape all posts`;
 
@@ -237,7 +325,7 @@
         const res = await fetch('/api/scrape', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ handle })
+          body: JSON.stringify({ handle, scan_id: currentScanId })
         });
 
         const data = await res.json();
@@ -246,20 +334,49 @@
         }
 
         globalData = data;
+        saveScanToHistory(data);
         renderDashboard(data);
       } catch (err) {
-        alert("Scan error: " + err.message);
+        alert("Scan notice: " + err.message);
       } finally {
-        document.getElementById('scrapeBtn').disabled = false;
-        document.getElementById('btnSpinner').classList.add('hidden');
-        document.getElementById('btnText').innerText = "🚀 Scan Full Account";
+        isScanning = false;
+        document.getElementById('scrapeBtn').classList.remove('hidden');
+        document.getElementById('stopBtn').classList.add('hidden');
         document.getElementById('statusBox').classList.add('hidden');
       }
+    }
+
+    async function forceStopScan() {
+      if (!currentScanId) return;
+      document.getElementById('statusMessage').innerText = "Stopping scan & compiling all posts scraped so far...";
+      document.getElementById('stopBtn').disabled = true;
+
+      try {
+        await fetch('/api/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scan_id: currentScanId })
+        });
+      } catch (e) {
+        console.error("Stop error:", e);
+      }
+    }
+
+    function resetToNewScan() {
+      globalData = null;
+      selectedDomainFilter = null;
+      document.getElementById('handleInput').value = '';
+      document.getElementById('handleInput').focus();
+      document.getElementById('resultsSection').classList.add('hidden');
+      document.getElementById('emptyPlaceholder').classList.remove('hidden');
+      document.getElementById('statusBox').classList.add('hidden');
+      document.getElementById('newScanHeaderBtn').classList.add('hidden');
     }
 
     function renderDashboard(data) {
       document.getElementById('emptyPlaceholder').classList.add('hidden');
       document.getElementById('resultsSection').classList.remove('hidden');
+      document.getElementById('newScanHeaderBtn').classList.remove('hidden');
 
       document.getElementById('profileAvatar').src = data.profile.avatar || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png';
       document.getElementById('profileName').innerText = data.profile.name || data.handle;
@@ -269,6 +386,15 @@
       document.getElementById('kpiPosts').innerText = data.total_posts;
       document.getElementById('kpiDomains').innerText = data.unique_domains_count;
       
+      const badge = document.getElementById('kpiStatusBadge');
+      if (data.stopped_early) {
+        badge.innerText = "Stopped & preserved";
+        badge.className = "text-[11px] text-amber-400 font-medium";
+      } else {
+        badge.innerText = "Full account scanned";
+        badge.className = "text-[11px] text-emerald-400 font-medium";
+      }
+
       const latest = data.posts.length > 0 ? formatDate(data.posts[0].created_at) : '—';
       document.getElementById('kpiLatest').innerText = latest;
 
@@ -408,6 +534,129 @@
       });
     }
 
+    // --- DRAWER & LOCAL STORAGE HISTORY ---
+
+    function getHistory() {
+      try {
+        return JSON.parse(localStorage.getItem('x_scans_history') || '[]');
+      } catch {
+        return [];
+      }
+    }
+
+    function saveScanToHistory(data) {
+      if (!data || !data.handle) return;
+      let history = getHistory();
+      // Remove any existing entry for this handle so latest is on top
+      history = history.filter(h => h.handle.toLowerCase() !== data.handle.toLowerCase());
+      history.unshift({
+        id: 'scan_' + Date.now(),
+        handle: data.handle,
+        name: data.profile.name || data.handle,
+        avatar: data.profile.avatar || '',
+        total_posts: data.total_posts,
+        unique_domains_count: data.unique_domains_count,
+        savedAt: new Date().toISOString(),
+        data: data
+      });
+      // Keep up to 25 accounts
+      if (history.length > 25) history = history.slice(0, 25);
+      localStorage.setItem('x_scans_history', JSON.stringify(history));
+      updateHistoryDrawerBadge();
+    }
+
+    function updateHistoryDrawerBadge() {
+      const history = getHistory();
+      document.getElementById('historyCountBadge').innerText = history.length;
+      renderDrawerList();
+    }
+
+    function toggleHistoryDrawer() {
+      const drawer = document.getElementById('historyDrawer');
+      const backdrop = document.getElementById('drawerBackdrop');
+      const isOpen = !drawer.classList.contains('translate-x-full');
+
+      if (isOpen) {
+        drawer.classList.add('translate-x-full');
+        backdrop.classList.add('hidden');
+      } else {
+        renderDrawerList();
+        drawer.classList.remove('translate-x-full');
+        backdrop.classList.remove('hidden');
+      }
+    }
+
+    function renderDrawerList() {
+      const container = document.getElementById('drawerList');
+      const history = getHistory();
+      container.innerHTML = '';
+
+      if (history.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-12 text-[#71767B] text-xs">
+            <p>No saved scans yet.</p>
+            <p class="text-[11px] mt-1">When you scan an account, it will automatically be saved here.</p>
+          </div>
+        `;
+        return;
+      }
+
+      history.forEach(item => {
+        const isCurrent = globalData && globalData.handle && globalData.handle.toLowerCase() === item.handle.toLowerCase();
+        const card = document.createElement('div');
+        card.className = `p-3 rounded-xl border transition-colors flex items-center justify-between gap-3 cursor-pointer ${
+          isCurrent 
+            ? 'bg-[#1D9BF0]/10 border-[#1D9BF0]' 
+            : 'bg-[#000000] border-[#2F3336] hover:border-[#71767B]'
+        }`;
+
+        card.innerHTML = `
+          <div onclick="loadSavedScan('${item.handle}')" class="flex items-center gap-2.5 min-w-0 flex-1">
+            <img src="${item.avatar || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png'}" class="w-8 h-8 rounded-full border border-[#2F3336] object-cover bg-neutral-900" />
+            <div class="min-w-0">
+              <h4 class="text-xs font-bold text-[#F7F9F9] truncate">${escapeHtml(item.name)}</h4>
+              <p class="text-[11px] text-[#71767B] truncate">@${escapeHtml(item.handle)} &bull; ${item.total_posts} posts &bull; ${item.unique_domains_count} doms</p>
+            </div>
+          </div>
+          <button onclick="deleteSavedScan('${item.handle}', event)" title="Delete from history" class="text-[#71767B] hover:text-rose-400 p-1 text-xs">
+            &times;
+          </button>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function loadSavedScan(handle) {
+      const history = getHistory();
+      const match = history.find(h => h.handle.toLowerCase() === handle.toLowerCase());
+      if (match && match.data) {
+        globalData = match.data;
+        document.getElementById('handleInput').value = match.handle;
+        renderDashboard(match.data);
+        toggleHistoryDrawer();
+      }
+    }
+
+    function deleteSavedScan(handle, event) {
+      event.stopPropagation();
+      let history = getHistory();
+      history = history.filter(h => h.handle.toLowerCase() !== handle.toLowerCase());
+      localStorage.setItem('x_scans_history', JSON.stringify(history));
+      updateHistoryDrawerBadge();
+    }
+
+    function clearAllCache() {
+      if (confirm("Clear all saved scans and reset the dashboard cache?")) {
+        localStorage.removeItem('x_scans_history');
+        updateHistoryDrawerBadge();
+        resetToNewScan();
+        const drawer = document.getElementById('historyDrawer');
+        if (!drawer.classList.contains('translate-x-full')) {
+          toggleHistoryDrawer();
+        }
+      }
+    }
+
     function formatDate(isoStr) {
       if (!isoStr) return '&mdash;';
       try {
@@ -420,7 +669,7 @@
 
     function escapeHtml(text) {
       const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-      return text.replace(/[&<>"']/g, m => map[m]);
+      return String(text || '').replace(/[&<>"']/g, m => map[m]);
     }
 
     function exportCsv() {
