@@ -434,6 +434,12 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=1000):
                 });
             }''')
 
+            if scan_id and ACTIVE_SCANS.get(scan_id, {}).get("stop"):
+                print(f"[Scraper] Force stop triggered after evaluate for {scan_id}. Preserving {len(posts_list)} posts.")
+                result["stopped_early"] = True
+                update_scan_progress(scan_id, 96, f"Force stop received. Finalizing {len(posts_list)} posts...", len(posts_list), len(domain_counts))
+                break
+
             new_in_batch = 0
             for item in extracted:
                 status_href = item.get("statusHref", "")
@@ -470,9 +476,12 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=1000):
             detail_msg = f"Scrolling timeline • Round {scroll_round} • Captured {len(posts_list)} posts • {len(domain_counts)} unique domains"
             update_scan_progress(scan_id, progress_pct, detail_msg, len(posts_list), len(domain_counts))
 
-            # Scroll down and wait for render
+            # Scroll down and wait for render with sub-second stop check
             await page.evaluate("window.scrollBy(0, 3200)")
-            await asyncio.sleep(1.3)
+            for _ in range(13):
+                if scan_id and ACTIVE_SCANS.get(scan_id, {}).get("stop"):
+                    break
+                await asyncio.sleep(0.1)
 
         await browser.close()
         update_scan_progress(scan_id, 98, f"Formatting {len(posts_list)} posts and extracting root domains...", len(posts_list), len(domain_counts))
@@ -515,7 +524,12 @@ def api_scans():
             s["details"] = ACTIVE_SCANS[s_id].get("details", s["details"])
             s["posts_count"] = ACTIVE_SCANS[s_id].get("posts_count", s["posts_count"])
             s["domains_count"] = ACTIVE_SCANS[s_id].get("domains_count", s["domains_count"])
-            s["status"] = "running"
+            if ACTIVE_SCANS[s_id].get("stop"):
+                s["status"] = "stopped" if s.get("status") == "stopped" else "stopping"
+            elif s.get("status") in ("completed", "stopped", "failed"):
+                pass
+            else:
+                s["status"] = "running"
     return jsonify(scans)
 
 @app.route("/api/scan/start", methods=["POST"])
@@ -579,18 +593,34 @@ def api_get_scan(scan_id):
         rec["details"] = ACTIVE_SCANS[scan_id].get("details", rec.get("details", ""))
         rec["posts_count"] = ACTIVE_SCANS[scan_id].get("posts_count", rec.get("posts_count", 0))
         rec["domains_count"] = ACTIVE_SCANS[scan_id].get("domains_count", rec.get("domains_count", 0))
-        rec["status"] = "running"
+        if ACTIVE_SCANS[scan_id].get("stop"):
+            rec["status"] = "stopped" if rec.get("status") == "stopped" else "stopping"
+        elif rec.get("status") in ("completed", "stopped", "failed"):
+            pass
+        else:
+            rec["status"] = "running"
 
     return jsonify(rec)
 
 @app.route("/api/scan/<scan_id>/stop", methods=["POST"])
 def api_stop_scan_id(scan_id):
     """Signal a running background scrape on the VPS to gracefully stop and save captured posts."""
+    print(f"[API] Stop request received for scan_id: {scan_id}")
     if scan_id in ACTIVE_SCANS:
         ACTIVE_SCANS[scan_id]["stop"] = True
-        print(f"[API] Stop request received for scan_id: {scan_id}")
-        return jsonify({"status": "stopping", "scan_id": scan_id})
-    return jsonify({"status": "not_running_or_already_stopped", "scan_id": scan_id})
+        ACTIVE_SCANS[scan_id]["details"] = "Force stop received. Finalizing captured posts..."
+
+    conn = get_db_connection()
+    with conn:
+        conn.execute("""
+            UPDATE scans 
+            SET status = CASE WHEN status = 'running' THEN 'stopped' ELSE status END,
+                details = 'Stopping scan and finalizing captured posts...'
+            WHERE id = ?
+        """, (scan_id,))
+    conn.close()
+
+    return jsonify({"status": "stopping", "scan_id": scan_id})
 
 @app.route("/api/scan/<scan_id>", methods=["DELETE"])
 def api_delete_scan(scan_id):

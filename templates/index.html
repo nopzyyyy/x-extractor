@@ -361,17 +361,29 @@
       progressPollTimer = setInterval(async () => {
         try {
           const res = await fetch(`/api/scan/${encodeURIComponent(scanId)}`);
-          if (!res.ok) return;
+          if (!res.ok) {
+            if (res.status === 404) {
+              stopProgressPolling();
+              isScanning = false;
+              document.getElementById('scrapeBtn').classList.remove('hidden');
+              document.getElementById('stopBtn').classList.add('hidden');
+              document.getElementById('stopBtn').disabled = false;
+              document.getElementById('statusBox').classList.add('hidden');
+              fetchSavedScans();
+            }
+            return;
+          }
           const data = await res.json();
           if (!data) return;
 
-          if (data.status === 'running') {
+          if (data.status === 'running' || data.status === 'stopping') {
             updateProgressUI(data.percent, data.details, data.posts_count, data.domains_count);
           } else if (data.status === 'completed' || data.status === 'stopped') {
             stopProgressPolling();
             isScanning = false;
             document.getElementById('scrapeBtn').classList.remove('hidden');
             document.getElementById('stopBtn').classList.add('hidden');
+            document.getElementById('stopBtn').disabled = false;
             document.getElementById('statusBox').classList.add('hidden');
 
             if (data.data) {
@@ -384,14 +396,15 @@
             isScanning = false;
             document.getElementById('scrapeBtn').classList.remove('hidden');
             document.getElementById('stopBtn').classList.add('hidden');
+            document.getElementById('stopBtn').disabled = false;
             document.getElementById('statusBox').classList.add('hidden');
-            alert("Scan stopped with notice: " + (data.error || data.details || "Unknown error"));
+            alert("Scan notice: " + (data.error || data.details || "Failed"));
             fetchSavedScans();
           }
         } catch (e) {
           // ignore transient poll errors
         }
-      }, 500);
+      }, 400);
     }
 
     function stopProgressPolling() {
@@ -456,7 +469,15 @@
     }
 
     async function forceStopScan() {
-      if (!currentScanId) return;
+      if (!currentScanId) {
+        const active = savedScansList.find(s => s.status === 'running' || s.status === 'stopping');
+        if (active) currentScanId = active.id;
+        else {
+          resetToNewScan();
+          return;
+        }
+      }
+
       document.getElementById('statusMessage').innerText = "Stopping scan & compiling posts on VPS...";
       document.getElementById('stopBtn').disabled = true;
       updateProgressUI(96, 'Force stop triggered. Finalizing captured posts & extracting domains...', undefined, undefined);
@@ -466,6 +487,25 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' }
         });
+        
+        // Immediately fetch the session
+        const detailRes = await fetch(`/api/scan/${encodeURIComponent(currentScanId)}`);
+        if (detailRes.ok) {
+          const scan = await detailRes.json();
+          if (scan.status === 'stopped' || scan.status === 'completed') {
+            stopProgressPolling();
+            isScanning = false;
+            document.getElementById('scrapeBtn').classList.remove('hidden');
+            document.getElementById('stopBtn').classList.add('hidden');
+            document.getElementById('stopBtn').disabled = false;
+            document.getElementById('statusBox').classList.add('hidden');
+            if (scan.data) {
+              globalData = scan.data;
+              renderDashboard(scan.data);
+            }
+            fetchSavedScans();
+          }
+        }
       } catch (e) {
         console.error("Stop error:", e);
       }
@@ -484,6 +524,7 @@
       document.getElementById('statusBox').classList.add('hidden');
       document.getElementById('scrapeBtn').classList.remove('hidden');
       document.getElementById('stopBtn').classList.add('hidden');
+      document.getElementById('stopBtn').disabled = false;
       document.getElementById('newScanHeaderBtn').classList.add('hidden');
     }
 
