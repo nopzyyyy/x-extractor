@@ -273,13 +273,13 @@ def extract_domains_and_urls(text, anchor_items):
 
     return sorted(list(domains)), sorted(list(set(urls)))
 
-def update_scan_progress(scan_id, percent, details, posts_count=0, domains_count=0):
+def update_scan_progress(scan_id, percent, details, posts_count=0, domains_count=0, sync_db=True):
     if scan_id and scan_id in ACTIVE_SCANS:
         ACTIVE_SCANS[scan_id]["percent"] = percent
         ACTIVE_SCANS[scan_id]["details"] = details
         ACTIVE_SCANS[scan_id]["posts_count"] = posts_count
         ACTIVE_SCANS[scan_id]["domains_count"] = domains_count
-    if scan_id:
+    if scan_id and sync_db:
         try:
             update_scan_progress_db(scan_id, percent, details, posts_count, domains_count)
         except Exception:
@@ -411,15 +411,16 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=None):
         empty_rounds = 0
         scroll_round = 0
         oldest_time = ""
+        search_attempted = False
 
-        print(f"[Scraper] Continuous scan running for @{handle} (unlimited depth, no cap)...")
-        update_scan_progress(scan_id, 28, f"Scanning timeline posts for @{handle}...", 0, 0)
+        print(f"[Scraper] Continuous scan running for @{handle} (unlimited depth, high speed)...")
+        update_scan_progress(scan_id, 28, f"Scanning timeline posts for @{handle}...", 0, 0, sync_db=True)
 
-        while empty_rounds < 8:
+        while empty_rounds < 12:
             if scan_id and ACTIVE_SCANS.get(scan_id, {}).get("stop"):
                 print(f"[Scraper] Force stop triggered for {scan_id}. Preserving {len(posts_list)} posts.")
                 result["stopped_early"] = True
-                update_scan_progress(scan_id, 96, f"Force stop received. Finalizing {len(posts_list)} posts...", len(posts_list), len(domain_counts))
+                update_scan_progress(scan_id, 96, f"Force stop received. Finalizing {len(posts_list)} posts...", len(posts_list), len(domain_counts), sync_db=True)
                 break
 
             if max_posts_cap and len(posts_list) >= max_posts_cap:
@@ -427,48 +428,59 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=None):
                 break
 
             scroll_round += 1
+
+            # In-browser deduplication: only transfer NEW articles across CDP
             extracted = await page.evaluate('''() => {
                 const articles = document.querySelectorAll('article');
-                return Array.from(articles).map(a => {
-                    const textEl = a.querySelector('[data-testid="tweetText"]');
-                    const timeEl = a.querySelector('time');
-                    const statusLink = a.querySelector('a[href*="/status/"]');
+                window._seenStatusHrefs = window._seenStatusHrefs || new Set();
+                const newArticles = [];
 
-                    const links = [];
-                    // 1. Text links
-                    if (textEl) {
-                        textEl.querySelectorAll('a').forEach(l => {
-                            const href = l.getAttribute('href') || '';
-                            const text = l.innerText || '';
-                            const title = l.getAttribute('title') || '';
-                            const aria = l.getAttribute('aria-label') || '';
-                            if (href || text || title || aria) links.push({ href, text, title, aria });
+                for (const a of articles) {
+                    const statusLink = a.querySelector('a[href*="/status/"]');
+                    const href = statusLink ? (statusLink.getAttribute('href') || '') : '';
+                    if (href && !window._seenStatusHrefs.has(href)) {
+                        window._seenStatusHrefs.add(href);
+
+                        const textEl = a.querySelector('[data-testid="tweetText"]');
+                        const timeEl = a.querySelector('time');
+                        const links = [];
+
+                        // 1. Text links
+                        if (textEl) {
+                            textEl.querySelectorAll('a').forEach(l => {
+                                const h = l.getAttribute('href') || '';
+                                const t = l.innerText || '';
+                                const tit = l.getAttribute('title') || '';
+                                const ar = l.getAttribute('aria-label') || '';
+                                if (h || t || tit || ar) links.push({ href: h, text: t, title: tit, aria: ar });
+                            });
+                        }
+                        // 2. Outbound card links & preview anchors
+                        a.querySelectorAll('a[target="_blank"], [data-testid*="card"] a, a[role="link"]').forEach(l => {
+                            const h = l.getAttribute('href') || '';
+                            const t = l.innerText || '';
+                            const tit = l.getAttribute('title') || '';
+                            const ar = l.getAttribute('aria-label') || '';
+                            if (h && !h.includes('/status/') && !h.match(/^\\/[a-zA-Z0-9_]+$/)) {
+                                links.push({ href: h, text: t, title: tit, aria: ar });
+                            }
+                        });
+
+                        newArticles.push({
+                            text: textEl ? textEl.innerText : '',
+                            time: timeEl ? timeEl.getAttribute('datetime') : '',
+                            statusHref: href,
+                            links: links
                         });
                     }
-                    // 2. Outbound card links & preview anchors
-                    a.querySelectorAll('a[target="_blank"], [data-testid*="card"] a, a[role="link"]').forEach(l => {
-                        const href = l.getAttribute('href') || '';
-                        const text = l.innerText || '';
-                        const title = l.getAttribute('title') || '';
-                        const aria = l.getAttribute('aria-label') || '';
-                        if (href && !href.includes('/status/') && !href.match(/^\\/[a-zA-Z0-9_]+$/)) {
-                            links.push({ href, text, title, aria });
-                        }
-                    });
-
-                    return {
-                        text: textEl ? textEl.innerText : '',
-                        time: timeEl ? timeEl.getAttribute('datetime') : '',
-                        statusHref: statusLink ? statusLink.getAttribute('href') : '',
-                        links: links
-                    };
-                });
+                }
+                return newArticles;
             }''')
 
             if scan_id and ACTIVE_SCANS.get(scan_id, {}).get("stop"):
                 print(f"[Scraper] Force stop triggered after evaluate for {scan_id}. Preserving {len(posts_list)} posts.")
                 result["stopped_early"] = True
-                update_scan_progress(scan_id, 96, f"Force stop received. Finalizing {len(posts_list)} posts...", len(posts_list), len(domain_counts))
+                update_scan_progress(scan_id, 96, f"Force stop received. Finalizing {len(posts_list)} posts...", len(posts_list), len(domain_counts), sync_db=True)
                 break
 
             new_in_batch = 0
@@ -501,24 +513,50 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=None):
 
             if new_in_batch == 0:
                 empty_rounds += 1
-                # If direct timeline stops before account creation year, pivot to historical search!
-                if empty_rounds >= 6 and oldest_time and joined_year and not (scan_id and ACTIVE_SCANS.get(scan_id, {}).get("stop")):
+                # Check for and click Twitter's timeline "Retry" button if infinite scroll hit a glitch
+                try:
+                    await page.evaluate('''() => {
+                        const buttons = Array.from(document.querySelectorAll('button, div[role="button"]'));
+                        for (const b of buttons) {
+                            const txt = (b.innerText || '').toLowerCase();
+                            if (txt.includes('retry') || txt.includes('try again') || txt.includes('reload')) {
+                                b.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }''')
+                except Exception:
+                    pass
+
+                # If timeline paused after 8 attempts, attempt search archive once without looping
+                if empty_rounds >= 8 and oldest_time and joined_year and not search_attempted and not (scan_id and ACTIVE_SCANS.get(scan_id, {}).get("stop")):
+                    search_attempted = True
                     try:
                         oldest_year = int(oldest_time[:4])
                     except Exception:
                         oldest_year = 0
+
                     if oldest_year > joined_year and oldest_year > 2006:
                         oldest_date = oldest_time.split("T")[0]
-                        print(f"[Scraper] Timeline paused at {oldest_date}. Continuing through search archive to reach {joined_year}...")
-                        update_scan_progress(scan_id, 80, f"Timeline reached {oldest_date}. Bridging search archive to {joined_year}...", len(posts_list), len(domain_counts))
+                        print(f"[Scraper] Timeline paused at {oldest_date}. Attempting search archive to reach {joined_year}...")
+                        update_scan_progress(scan_id, 85, f"Timeline reached {oldest_date}. Bridging search archive to {joined_year}...", len(posts_list), len(domain_counts), sync_db=True)
                         search_url = f"https://x.com/search?q=from%3A{handle}%20until%3A{oldest_date}&f=live"
                         try:
-                            await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-                            await asyncio.sleep(2.0)
-                            empty_rounds = 0
-                            continue
+                            await page.goto(search_url, wait_until="domcontentloaded", timeout=25000)
+                            await asyncio.sleep(2.5)
+                            has_articles = await page.evaluate("document.querySelectorAll('article').length > 0")
+                            if has_articles:
+                                empty_rounds = 0
+                                continue
+                            else:
+                                print(f"[Scraper] Search archive returned 0 articles (or rate limited). Preserving {len(posts_list)} posts.")
+                                break
                         except Exception as e:
-                            print(f"[Scraper] Search continuation error: {e}")
+                            print(f"[Scraper] Search continuation error: {e}. Preserving {len(posts_list)} posts.")
+                            break
+                    else:
+                        break
             else:
                 empty_rounds = 0
 
@@ -538,14 +576,19 @@ async def scrape_full_account(handle, scan_id=None, max_posts_cap=None):
             detail_msg = f"Scanning timeline • Round {scroll_round} • Captured {len(posts_list)} posts • {len(domain_counts)} unique domains"
             if oldest_time:
                 detail_msg = f"Scanning timeline (reached {oldest_time[:10]}) • {len(posts_list)} posts • {len(domain_counts)} unique domains"
-            update_scan_progress(scan_id, progress_pct, detail_msg, len(posts_list), len(domain_counts))
 
-            # Scroll down and wait for render with sub-second stop check
-            await page.evaluate("window.scrollBy(0, 3400)")
-            for _ in range(12):
+            # Disk write throttling: write to SQLite DB only every 5 rounds or at completion
+            is_sync_round = (scroll_round % 5 == 0) or (empty_rounds > 0)
+            update_scan_progress(scan_id, progress_pct, detail_msg, len(posts_list), len(domain_counts), sync_db=is_sync_round)
+
+            # High-speed scroll: 0.32s sleep when flowing, 0.64s when paused
+            scroll_dist = 3200 if new_in_batch > 0 else 4500
+            await page.evaluate(f"window.scrollBy(0, {scroll_dist})")
+            sleep_iters = 4 if new_in_batch > 0 else 8
+            for _ in range(sleep_iters):
                 if scan_id and ACTIVE_SCANS.get(scan_id, {}).get("stop"):
                     break
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.08)
 
         await browser.close()
         update_scan_progress(scan_id, 98, f"Formatting {len(posts_list)} posts and extracting root domains...", len(posts_list), len(domain_counts))
